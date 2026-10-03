@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  vela-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vela-source-engine
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+      - TORBOX_API_KEY=${TORBOX_API_KEY:-}
+      - CORS_ORIGIN=*
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
