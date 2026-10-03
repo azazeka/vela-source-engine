@@ -11,6 +11,20 @@ param containerImage string
 @secure()
 param torboxApiKey string = ''
 
+@description('Torznab API endpoint, usually ending in /api')
+param torznabUrl string = ''
+
+@description('Torznab indexer API key')
+@secure()
+param torznabApiKey string = ''
+
+@description('Optional comma-separated Torznab category IDs')
+param torznabCategories string = ''
+
+@description('Optional JSON array of Torznab indexers. Keep API keys in this secure parameter.')
+@secure()
+param torznabIndexersJson string = ''
+
 @description('Target port exposed by the Express container')
 param targetPort int = 3000
 
@@ -56,6 +70,14 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
           name: 'torbox-api-key'
           value: torboxApiKey
         }
+        {
+          name: 'torznab-api-key'
+          value: torznabApiKey
+        }
+        {
+          name: 'torznab-indexers-json'
+          value: torznabIndexersJson
+        }
       ]
     }
     template: {
@@ -79,6 +101,22 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'TORBOX_API_KEY'
               secretRef: 'torbox-api-key'
+            }
+            {
+              name: 'TORZNAB_URL'
+              value: torznabUrl
+            }
+            {
+              name: 'TORZNAB_API_KEY'
+              secretRef: 'torznab-api-key'
+            }
+            {
+              name: 'TORZNAB_CATEGORIES'
+              value: torznabCategories
+            }
+            {
+              name: 'TORZNAB_INDEXERS_JSON'
+              secretRef: 'torznab-indexers-json'
             }
           ]
           probes: [

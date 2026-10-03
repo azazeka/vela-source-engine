@@ -1,166 +1,160 @@
-import { StreamDescriptor, TorBoxCachedTorrent } from '../types';
+import { createHash } from 'node:crypto';
+import { MediaRequest, StreamDescriptor, TorBoxCachedTorrent, TorBoxFile } from '../types';
+import { FileMatcher } from './file-matcher';
+
+export interface LibraryTorrent extends TorBoxCachedTorrent {
+  id: number;
+  ready: boolean;
+}
+
+export class TorBoxError extends Error {
+  constructor(message: string, public readonly statusCode: number = 502) { super(message); }
+}
 
 export class TorBoxAdapter {
-  private readonly baseUrl = 'https://api.torbox.app/v1/api';
+  constructor(
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly baseUrl = 'https://api.torbox.app/v1/api',
+    private readonly defaultToken = process.env.TORBOX_API_KEY
+  ) {}
 
-  public async checkCached(
-    hashes: string[],
-    apiKey?: string
-  ): Promise<Map<string, TorBoxCachedTorrent>> {
-    const resultMap = new Map<string, TorBoxCachedTorrent>();
-    if (!hashes || hashes.length === 0) return resultMap;
+  private token(apiKey?: string): string {
+    const token = apiKey?.trim() || this.defaultToken?.trim();
+    if (!token) throw new TorBoxError('TorBox API key is required.', 401);
+    return token;
+  }
 
-    const token = apiKey || process.env.TORBOX_API_KEY;
+  public cacheScope(apiKey?: string): string {
+    return createHash('sha256').update(this.token(apiKey)).digest('hex');
+  }
 
-    if (!token) {
-      // Mock / Offline mode fallback for development and testing
-      return this.generateMockCached(hashes);
-    }
-
+  private async request(
+    path: string,
+    apiKey?: string,
+    query?: URLSearchParams,
+    options: { method?: string; body?: BodyInit } = {}
+  ): Promise<any> {
+    const token = this.token(apiKey);
+    const url = new URL(`${this.baseUrl}/${path}`);
+    if (query) url.search = query.toString();
+    if (path === 'torrents/requestdl') url.searchParams.set('token', token);
+    let response: Response;
     try {
-      // TorBox checkcached supports comma-separated hashes or batch
-      const hashParam = hashes.join(',');
-      const url = `${this.baseUrl}/torrents/checkcached?hash=${hashParam}&format=list&list_files=true`;
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        signal: AbortSignal.timeout(5000),
+      response = await this.fetcher(url, {
+        method: options.method ?? 'GET',
+        body: options.body,
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(6000),
       });
-
-      if (!response.ok) {
-        console.warn(`TorBox checkcached returned HTTP ${response.status}`);
-        return this.generateMockCached(hashes);
-      }
-
-      const json = await response.json() as any;
-      if (json.success && json.data) {
-        // TorBox data format: array of cached torrents or key-value object
-        if (Array.isArray(json.data)) {
-          for (const item of json.data) {
-            const h = item.hash?.toLowerCase();
-            if (h) {
-              resultMap.set(h, {
-                hash: h,
-                name: item.name || '',
-                size: item.size || 0,
-                files: Array.isArray(item.files)
-                  ? item.files.map((f: any, idx: number) => ({
-                      id: f.id !== undefined ? f.id : idx,
-                      name: f.name || f.short_name || '',
-                      size: f.size || 0,
-                      s_num: f.s_num,
-                      e_num: f.e_num,
-                    }))
-                  : [],
-              });
-            }
-          }
-        } else if (typeof json.data === 'object') {
-          for (const [hashKey, item] of Object.entries<any>(json.data)) {
-            const h = hashKey.toLowerCase();
-            resultMap.set(h, {
-              hash: h,
-              name: item.name || '',
-              size: item.size || 0,
-              files: Array.isArray(item.files)
-                ? item.files.map((f: any, idx: number) => ({
-                    id: f.id !== undefined ? f.id : idx,
-                    name: f.name || f.short_name || '',
-                    size: f.size || 0,
-                    s_num: f.s_num,
-                    e_num: f.e_num,
-                  }))
-                : [],
-            });
-          }
-        }
-      }
-      return resultMap;
-    } catch (err) {
-      console.warn('TorBox checkcached network failure, falling back to cached simulation:', err);
-      return this.generateMockCached(hashes);
+    } catch {
+      // Fetch errors can include the sensitive request URL. Do not forward them.
+      throw new TorBoxError('TorBox is temporarily unavailable.');
     }
+    if (!response.ok) {
+      throw new TorBoxError(`TorBox returned HTTP ${response.status}.`,
+        [401, 403].includes(response.status) ? 401 : 502);
+    }
+    let json: any;
+    try { json = await response.json(); } catch { throw new TorBoxError('Invalid TorBox response.'); }
+    if (json?.success !== true || json.data == null) throw new TorBoxError('TorBox request was not successful.');
+    return json.data;
+  }
+
+  private files(value: any): TorBoxFile[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((file: any) => {
+      const id = Number(file.id), size = Number(file.size);
+      const name = file.name ?? file.short_name;
+      if (file.id == null || !Number.isSafeInteger(id) || id < 0 ||
+          !Number.isFinite(size) || size <= 0 || typeof name !== 'string') return [];
+      return [{ id, size, name, s_num: file.s_num, e_num: file.e_num }];
+    });
+  }
+
+  public async listTorrents(apiKey?: string): Promise<LibraryTorrent[]> {
+    const torrents: LibraryTorrent[] = [];
+    const pageSize = 100;
+    for (let offset = 0; ; offset += pageSize) {
+      const data = await this.request('torrents/mylist', apiKey, new URLSearchParams({
+        offset: String(offset), limit: String(pageSize), bypass_cache: 'true',
+      }));
+      if (!Array.isArray(data)) throw new TorBoxError('Invalid TorBox library response.');
+      for (const row of data) {
+        const id = Number(row.id);
+        const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
+        if (row.id == null || !Number.isSafeInteger(id) || id < 0 || !/^[a-f0-9]{40}$/.test(hash)) continue;
+        torrents.push({
+          id, hash, name: String(row.name ?? ''), size: Number(row.size) || 0,
+          files: this.files(row.files),
+          ready: row.download_finished === true && row.download_present !== false,
+        });
+      }
+      if (data.length < pageSize) return torrents;
+    }
+  }
+
+  public async checkCached(hashes: string[], apiKey?: string): Promise<Map<string, TorBoxCachedTorrent>> {
+    this.token(apiKey);
+    const result = new Map<string, TorBoxCachedTorrent>();
+    for (let offset = 0; offset < hashes.length; offset += 100) {
+      const batch = hashes.slice(offset, offset + 100).map(hash => hash.toLowerCase());
+      const data = await this.request('torrents/checkcached', apiKey, new URLSearchParams({
+        hash: batch.join(','), format: 'list', list_files: 'true',
+      }));
+      const rows = Array.isArray(data) ? data :
+        (typeof data === 'object' ? Object.entries(data).map(([hash, row]: [string, any]) => ({ ...row, hash })) : null);
+      if (!rows) throw new TorBoxError('Invalid TorBox cache response.');
+      for (const row of rows) {
+        const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
+        if (!batch.includes(hash)) continue;
+        result.set(hash, { hash, name: String(row.name ?? ''), size: Number(row.size) || 0, files: this.files(row.files) });
+      }
+    }
+    return result;
   }
 
   public async requestDownloadLink(
-    torrentHash: string,
-    fileId: number,
-    apiKey?: string
+    torrentHash: string, fileId: number, apiKey?: string, request?: MediaRequest
   ): Promise<StreamDescriptor> {
-    const token = apiKey || process.env.TORBOX_API_KEY;
-
-    if (!token) {
-      // Demo / development direct stream descriptor
-      return {
-        streamUrl: `https://torbox-mock-cdn.example.com/stream/${torrentHash}/${fileId}.mkv`,
-        mimeType: 'video/x-matroska',
-        fileName: `media_${fileId}.mkv`,
-        sizeBytes: 25_000_000_000,
-        expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
-      };
-    }
-
-    try {
-      const url = `${this.baseUrl}/torrents/requestdl?token=${token}&torrent_id=${torrentHash}&file_id=${fileId}&zip=false`;
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(6000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`TorBox requestdl failed with status ${response.status}`);
+    // Resolve the hash to the account's numeric torrent ID and real file IDs.
+    let torrent = (await this.listTorrents(apiKey)).find(t => t.hash === torrentHash.toLowerCase());
+    if (!torrent) {
+      // TorBox requires torrents to belong to the user's library before it will issue a stream link.
+      // Only add items already cached by TorBox, so selecting an uncached result never starts a download.
+      const form = new FormData();
+      form.set('magnet', `magnet:?xt=urn:btih:${torrentHash.toLowerCase()}`);
+      form.set('add_only_if_cached', 'true');
+      try {
+        await this.request('torrents/createtorrent', apiKey, undefined, { method: 'POST', body: form });
+      } catch (error) {
+        if (error instanceof TorBoxError && /HTTP (400|404)\./.test(error.message)) {
+          throw new TorBoxError('This torrent is not cached or could not be added to your TorBox library.', 409);
+        }
+        throw error;
       }
-
-      const json = await response.json() as any;
-      if (json.success && json.data) {
-        const streamUrl = typeof json.data === 'string' ? json.data : json.data.link;
-        return {
-          streamUrl,
-          mimeType: 'video/x-matroska',
-          fileName: json.data.filename || `file_${fileId}.mkv`,
-          sizeBytes: json.data.size || 0,
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
-        };
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        torrent = (await this.listTorrents(apiKey)).find(t => t.hash === torrentHash.toLowerCase());
+        if (torrent?.ready) break;
       }
-      throw new Error(json.detail || 'Failed to obtain download link from TorBox');
-    } catch (err: any) {
-      throw new Error(`TorBox stream resolution error: ${err.message}`);
     }
+    if (!torrent) throw new TorBoxError('TorBox did not add this cached torrent to your library.', 409);
+    if (!torrent.ready) throw new TorBoxError('This torrent is still downloading.', 409);
+    const file = request ? FileMatcher.matchFile(request, torrent.files) : torrent.files.find(f => f.id === fileId);
+    if (!file) throw new TorBoxError('The requested media file is unavailable.', 404);
+    const data = await this.request('torrents/requestdl', apiKey, new URLSearchParams({
+      torrent_id: String(torrent.id), file_id: String(file.id), redirect: 'false', zip_link: 'false',
+    }));
+    const rawURL = typeof data === 'string' ? data : data.url ?? data.download_url ?? data.download ?? data.link;
+    let url: URL;
+    try { url = new URL(rawURL); } catch { throw new TorBoxError('Invalid TorBox stream URL.'); }
+    if (url.protocol !== 'https:') throw new TorBoxError('TorBox stream URL must use HTTPS.');
+    return { streamUrl: url.toString(), mimeType: /\.mkv$/i.test(file.name) ? 'video/x-matroska' : 'video/mp4',
+      fileName: file.name, sizeBytes: file.size, expiresAt: null };
   }
 
   public async health(apiKey?: string): Promise<'ok' | 'degraded' | 'unauthorized' | 'down'> {
-    const token = apiKey || process.env.TORBOX_API_KEY;
-    if (!token) return 'ok'; // Running in mock/standalone mode
-
-    try {
-      const res = await fetch(`${this.baseUrl}/user/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (res.status === 401 || res.status === 403) return 'unauthorized';
-      if (res.ok) return 'ok';
-      return 'degraded';
-    } catch {
-      return 'down';
-    }
-  }
-
-  private generateMockCached(hashes: string[]): Map<string, TorBoxCachedTorrent> {
-    const map = new Map<string, TorBoxCachedTorrent>();
-    for (const hash of hashes) {
-      // Simulate that known mock hashes or high-priority hashes are cached
-      map.set(hash, {
-        hash,
-        name: `Cached_Release_${hash.slice(0, 6)}`,
-        size: 35_000_000_000,
-        files: [
-          { id: 1, name: 'Sample/sample.mkv', size: 30_000_000 },
-          { id: 2, name: `Main.Movie.2160p.${hash.slice(0, 4)}.mkv`, size: 34_500_000_000 },
-          { id: 3, name: 'Silo.S02E04.2160p.mkv', size: 4_500_000_000, s_num: 2, e_num: 4 },
-        ],
-      });
-    }
-    return map;
+    try { await this.request('user/me', apiKey); return 'ok'; }
+    catch (error) { return error instanceof TorBoxError && error.statusCode === 401 ? 'unauthorized' : 'down'; }
   }
 }

@@ -1,6 +1,6 @@
 # Vela Source Engine & Orchestrator (Azure Backend)
 
-High-performance Node.js / Express microservice that acts as the **Source Engine Plane** for the **Vela tvOS** app. It searches torrent sources, parses audio/video release metadata, ranks releases using smart presets (`best`, `balanced`, `data_saver`), queries TorBox cache status in batch, resolves direct CDN playback URLs, and provides automatic failure recovery.
+High-performance Node.js / Express microservice that acts as the **Source Engine Plane** for the **Vela tvOS** app. By default it searches real, completed files in the authenticated user's TorBox library, parses audio/video release metadata, ranks releases using smart presets (`best`, `balanced`, `data_saver`), checks TorBox cache status in batches, resolves direct CDN playback URLs, and provides automatic failure recovery. External indexers are not configured. No mock provider or simulated TorBox cache/stream response is enabled in the server; missing credentials and upstream failures are reported as errors.
 
 ---
 
@@ -53,7 +53,7 @@ npm run build
 # Start server (defaults to port 3000)
 npm start
 
-# Run unit & end-to-end tests (15 tests)
+# Run unit & HTTP integration tests
 npm test
 ```
 
@@ -129,10 +129,10 @@ Liveness and readiness check probe.
 ```
 
 ### 2. `POST /session/start`
-Pre-warms backend worker and validates credentials.
+Checks TorBox credentials and provider health. Missing or invalid credentials return a degraded session with torbox=unauthorized.
 ```json
 // Headers: Authorization: Bearer <token>
-{ "status": "ready", "authenticated": true }
+{ "status": "ready", "sourceEngine": true, "torbox": "ok", "providers": { "healthy": 1, "degraded": 0 } }
 ```
 
 ### 3. `POST /sources/prefetch`
@@ -183,7 +183,7 @@ Single-click instant play resolution.
 ```
 
 ### 5. `GET /versions/:mediaKey`
-Returns list of all available releases for manual selection.
+Returns cached versions for the authenticated account. Movie keys use movie:<tmdbId>; episode keys use episode:<tmdbId>:<season>:<episode>. Send the same Authorization header as the resolve request.
 ```json
 {
   "mediaKey": "movie:693134",
@@ -221,5 +221,17 @@ Blacklists failed stream candidate and automatically returns fallback stream.
 | `HOST` | `0.0.0.0` | Host binding for container networking |
 | `NODE_ENV` | `production` | Environment mode |
 | `TORBOX_API_KEY` | *(empty)* | Optional default TorBox API key |
+| `TORZNAB_URL` | *(empty)* | Optional Torznab indexer API URL (usually ends in `/api`); enables external search |
+| `TORZNAB_API_KEY` | *(empty)* | Optional API key for the configured Torznab indexer |
+| `TORZNAB_CATEGORIES` | *(empty)* | Optional comma-separated category IDs supported by that indexer |
+| `TORZNAB_INDEXERS_JSON` | *(built-in public sources)* | Optional JSON array of indexers; overrides the built-in sources and supports separate keys/categories per source |
 | `CORS_ORIGIN` | `*` | Allowed CORS origins for browser/API clients |
 | `LOG_LEVEL` | `info` | Logger verbosity |
+
+## Source and playback boundaries
+
+The default `TorBoxLibraryProvider` matches localized/original titles and episode numbers against existing account files. When no Torznab configuration is provided, Vela queries two public, anonymous Torznab sources: AniBT (anime category) and Torlock (general search). This sends searched titles to those third parties. Set `TORZNAB_INDEXERS_JSON` to your own JSON array to replace these defaults, or set `TORZNAB_URL` for a single custom endpoint. Example JSON shape: `[{"id":"source1","name":"Source 1","url":"https://indexer.example/api","apiKey":"…","categories":"2000,5000"}]`. The indexer URLs and keys stay in backend configuration and are never returned to clients. Torznab results can be played only when TorBox has them cached: on playback, Vela adds a missing result to the user's TorBox library with `add_only_if_cached=true`, so it will not start an uncached download. Configure only indexer endpoints you are authorized to use.
+
+Playback resolves the selected hash through `torrents/mylist`, matches the file using account metadata, and passes numeric torrent/file IDs to `requestdl`. CDN links are validated as HTTPS. Cache and failure exclusions are scoped to a hash of the effective account key; API keys and signed URLs are not logged.
+
+Tests use injected HTTP fixtures, including numeric IDs differing from torrent hashes and cached file IDs, upstream 401/500 failures, network errors, missing titles, account isolation, exact episode versions and HTTP fallback. These checks do not verify a live TorBox account.

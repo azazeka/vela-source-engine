@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { CacheManager } from '../services/cache-manager';
 import { RankingEngine } from '../services/ranking-engine';
 import { SourceEngine } from '../services/source-engine';
-import { TorBoxAdapter } from '../services/torbox-adapter';
+import { TorBoxAdapter, TorBoxError } from '../services/torbox-adapter';
 import { MediaRequest, QualityPreset } from '../types';
 
 export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAdapter): Router {
@@ -14,7 +14,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
     if (auth && auth.startsWith('Bearer ')) {
       return auth.substring(7).trim();
     }
-    return undefined;
+    return typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'].trim() : undefined;
   };
 
   // 1. GET /health
@@ -31,10 +31,10 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
     try {
       const apiKey = getApiKey(req);
       const torboxHealth = await torboxAdapter.health(apiKey);
-      const providersHealth = await sourceEngine.checkProvidersHealth();
+      const providersHealth = await sourceEngine.checkProvidersHealth(apiKey);
 
       const overallStatus =
-        torboxHealth === 'down' || providersHealth.healthy === 0 ? 'degraded' : 'ready';
+        torboxHealth !== 'ok' || providersHealth.healthy === 0 ? 'degraded' : 'ready';
 
       res.json({
         status: overallStatus,
@@ -46,8 +46,14 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
         },
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
     }
+  });
+
+  // Require an account for source caches and playback; health stays public.
+  router.use((req, res, next) => {
+    try { torboxAdapter.cacheScope(getApiKey(req)); next(); }
+    catch { res.status(401).json({ error: 'TorBox API key is required.' }); }
   });
 
   // 3. POST /sources/prefetch (Section 04 & 14: background prefetch when user opens movie details)
@@ -63,7 +69,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
 
     // Fire and forget / background resolve
     sourceEngine.searchCandidates(request, 'best', apiKey).catch((err) => {
-      console.warn(`Prefetch failed for ${mediaKey}:`, err.message);
+      console.warn(`Prefetch failed for ${mediaKey}.`);
     });
 
     res.status(202).json({
@@ -89,7 +95,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
         candidates,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
     }
   });
 
@@ -103,7 +109,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       return;
     }
 
-    const cached = CacheManager.getCandidates(mediaKey);
+    const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
     if (!cached) {
       res.status(404).json({ error: 'No cached candidates found for this mediaKey' });
       return;
@@ -129,14 +135,14 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       const result = await sourceEngine.resolvePlay(request, candidateId, preset, apiKey);
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
     }
   });
 
   // 7. GET /versions/:mediaKey (Section 10: Manual versions list)
   router.get('/versions/:mediaKey', (req: Request, res: Response) => {
     const mediaKey = req.params.mediaKey;
-    const cached = CacheManager.getCandidates(mediaKey);
+    const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
 
     if (!cached) {
       res.status(404).json({ error: 'No versions found or expired for this mediaKey' });
@@ -158,11 +164,16 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
         return;
       }
 
+      if (!request || sourceEngine.getMediaKey(request) !== mediaKey) {
+        res.status(400).json({ error: 'Playback media key does not match request.' });
+        return;
+      }
+
       // Mark candidate as bad
-      CacheManager.markCandidateFailure(candidateId);
+      CacheManager.markCandidateFailure(candidateId, undefined, torboxAdapter.cacheScope(getApiKey(req)));
 
       // Check if we can fallback to the next candidate
-      const cached = CacheManager.getCandidates(mediaKey);
+      const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
       if (cached && cached.length > 0) {
         const nextCandidate = cached[0];
         const apiKey = getApiKey(req);
@@ -186,7 +197,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
         candidateId,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
     }
   });
 

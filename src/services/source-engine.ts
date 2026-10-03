@@ -10,9 +10,8 @@ import {
 import { CacheManager } from './cache-manager';
 import { FileMatcher } from './file-matcher';
 import { Normalizer } from './normalizer';
-import { QueryBuilder } from './query-builder';
 import { RankingEngine } from './ranking-engine';
-import { TorBoxAdapter } from './torbox-adapter';
+import { TorBoxAdapter, TorBoxError } from './torbox-adapter';
 
 export class SourceEngine {
   private providers: TorrentProvider[] = [];
@@ -39,32 +38,35 @@ export class SourceEngine {
     apiKey?: string
   ): Promise<PlayCandidate[]> {
     const mediaKey = this.getMediaKey(request);
+    const scope = this.torbox.cacheScope(apiKey);
 
     // 1. Check cache first
-    const cached = CacheManager.getCandidates(mediaKey);
+    const cached = CacheManager.getCandidates(mediaKey, scope);
     if (cached && cached.length > 0) {
       return RankingEngine.rank(cached, preset);
     }
 
-    // 2. Query Builder
-    const queries = QueryBuilder.buildQueries(request);
-
-    // 3. Provider fan-out with timeout protection (3.5s per provider)
+    // Provider fan-out with bounded searches; account pagination may take longer than a single request.
     const rawReleases: RawRelease[] = [];
+    const providerErrors: unknown[] = [];
     const searchPromises = this.providers.map(async (provider) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const timeoutPromise = new Promise<RawRelease[]>((_, reject) =>
-          setTimeout(() => reject(new Error('Provider search timeout')), 3500)
-        );
-        const searchPromise = provider.search(request);
-        const results = await Promise.race([searchPromise, timeoutPromise]);
+        const timeoutPromise = new Promise<RawRelease[]>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Provider search timeout')), 10000);
+        });
+        const results = await Promise.race([provider.search(request, apiKey), timeoutPromise]);
         rawReleases.push(...results);
-      } catch (err: any) {
-        console.warn(`Provider ${provider.id} error:`, err.message);
+      } catch (error) {
+        providerErrors.push(error);
+        console.warn(`Provider ${provider.id} search failed.`);
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     });
 
     await Promise.all(searchPromises);
+    if (rawReleases.length === 0 && providerErrors.length > 0) throw providerErrors[0];
 
     // 4. Normalizer & Deduplicator
     const normalized = Normalizer.normalize(rawReleases);
@@ -99,7 +101,7 @@ export class SourceEngine {
         fileSize = matchedFile.size;
       }
 
-      const candidateId = `cand_${rel.infoHash.slice(0, 8)}_${fileId}`;
+      const candidateId = `cand_${rel.infoHash}_${fileId}`;
 
       candidates.push({
         candidateId,
@@ -123,11 +125,11 @@ export class SourceEngine {
     }
 
     // 7. Ranking
-    const ranked = RankingEngine.rank(candidates, preset);
+    const ranked = RankingEngine.rank(candidates.filter(candidate => !CacheManager.isFailed(candidate.candidateId, scope)), preset);
 
     // 8. Save in cache
     if (ranked.length > 0) {
-      CacheManager.setCandidates(mediaKey, ranked);
+      CacheManager.setCandidates(mediaKey, ranked, undefined, scope);
     }
 
     return ranked;
@@ -141,21 +143,20 @@ export class SourceEngine {
   ): Promise<PlayResolveResponse> {
     const candidates = await this.searchCandidates(request, preset, apiKey);
     if (candidates.length === 0) {
-      throw new Error('No playable candidates found for this media.');
+      throw new TorBoxError('No playable candidates found for this media.', 404);
     }
 
-    let selected = candidateId
+    const selected = candidateId
       ? candidates.find((c) => c.candidateId === candidateId)
       : candidates.find((c) => c.cached) || candidates[0];
 
-    if (!selected) {
-      selected = candidates[0];
-    }
+    if (!selected) throw new TorBoxError('The selected version is unavailable.', 404);
 
     const stream = await this.torbox.requestDownloadLink(
       selected.torrentHash,
       selected.fileId,
-      apiKey
+      apiKey,
+      request
     );
 
     return {
@@ -164,10 +165,10 @@ export class SourceEngine {
     };
   }
 
-  public async checkProvidersHealth(): Promise<{ healthy: number; degraded: number; list: ProviderHealth[] }> {
+  public async checkProvidersHealth(apiKey?: string): Promise<{ healthy: number; degraded: number; list: ProviderHealth[] }> {
     const results = await Promise.all(
       this.providers.map((p) =>
-        p.health().catch((err) => ({
+        p.health(apiKey).catch((err) => ({
           id: p.id,
           healthy: false,
           latencyMs: 0,
