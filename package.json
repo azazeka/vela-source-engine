@@ -2,10 +2,10 @@
   "name": "vela-source-engine",
   "version": "1.0.0",
   "description": "Vela Source Engine & TorBox Orchestrator Backend for tvOS",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "tsc && node dist/index.js",
+    "start": "tsc && node dist/src/index.js",
     "dev": "tsc -w",
     "test": "tsc && node --test dist/tests/**/*.test.js"
   },
