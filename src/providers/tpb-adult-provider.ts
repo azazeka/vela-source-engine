@@ -69,9 +69,13 @@ export class TpbAdultProvider implements TorrentProvider {
       const data: ApibayItem[] = await this.fetchJson(`/q.php?q=${encodeURIComponent(query)}&cat=500`);
       if (!Array.isArray(data)) return [];
 
+      const isGaySearch = /\b(gay|belami|seancody|sean cody|falcon|lucas|raging stallion|cockyboys|corbin|helix|timtales|men\.com)\b/i.test(query);
+      const femaleExcludePattern = /\b(milf|female|lesbian|pussy|tits|boobs|stepmom|stepsister|shemale)\b/i;
+
       const releases: RawRelease[] = [];
       for (const item of data) {
         if (!item || !item.name || item.id === '0' || !item.info_hash) continue;
+        if (isGaySearch && femaleExcludePattern.test(item.name)) continue;
         const normalizedHash = item.info_hash.trim().toLowerCase();
         if (normalizedHash === '0000000000000000000000000000000000000000' || !/^[a-f0-9]{40}$/.test(normalizedHash)) {
           continue;

@@ -4,7 +4,7 @@ import { CacheManager } from '../services/cache-manager';
 import { RankingEngine } from '../services/ranking-engine';
 import { SourceEngine } from '../services/source-engine';
 import { TorBoxAdapter, TorBoxError } from '../services/torbox-adapter';
-import { CandidateSummary, MediaRequest, QualityPreset } from '../types';
+import { CandidateSummary, MediaRequest, PlayCandidate, QualityPreset } from '../types';
 
 export function createRouter(
   sourceEngine: SourceEngine,
@@ -158,7 +158,43 @@ export function createRouter(
       };
 
       const apiKey = getApiKey(req);
-      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
+      let candidates: PlayCandidate[];
+      const lower = effectiveQuery.toLowerCase();
+      if (lower === 'gay trending' || lower === 'trending gay' || lower === 'gay') {
+        const gayTopStudios = ['BelAmi', 'Falcon Studios', 'Sean Cody', 'Lucas Entertainment', 'CockyBoys'];
+        const results = await Promise.allSettled(
+          gayTopStudios.map(studio => {
+            const subReq: MediaRequest = {
+              type: 'movie',
+              tmdbId: -1,
+              title: studio,
+              originalTitle: studio,
+              year: new Date().getFullYear(),
+              isAdult: true,
+            };
+            return sourceEngine.searchCandidates(subReq, preset, apiKey);
+          })
+        );
+        const seenHashes = new Set<string>();
+        const merged: PlayCandidate[] = [];
+        for (const res of results) {
+          if (res.status === 'fulfilled') {
+            for (const cand of res.value) {
+              if (!seenHashes.has(cand.torrentHash)) {
+                seenHashes.add(cand.torrentHash);
+                merged.push(cand);
+              }
+            }
+          }
+        }
+        merged.sort((a, b) => {
+          if (a.cached !== b.cached) return a.cached ? -1 : 1;
+          return b.score - a.score;
+        });
+        candidates = merged.slice(0, 100);
+      } else {
+        candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
+      }
       res.json({
         query: effectiveQuery,
         mediaKey: sourceEngine.getMediaKey(request),

@@ -73,7 +73,9 @@ export class TorznabProvider implements TorrentProvider {
       if (this.categories) {
         url.searchParams.set('cat', this.categories);
       } else if (isAdult) {
-        url.searchParams.set('cat', '6000');
+        const lower = (query || '').toLowerCase();
+        const isGay = /\b(gay|belami|seancody|sean cody|falcon|lucas|raging stallion|cockyboys|corbin|helix|timtales|men\.com)\b/i.test(lower);
+        url.searchParams.set('cat', isGay ? '6070,6000' : '6000');
       }
     }
     if (this.apiKey) url.searchParams.set('apikey', this.apiKey);
