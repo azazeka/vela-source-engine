@@ -8,11 +8,12 @@ import { TorBoxLibraryProvider } from '../providers/torbox-library-provider';
 import { createConfiguredTorznabProviders } from '../providers/torznab-provider';
 import { YtsProvider } from '../providers/yts-provider';
 import { TorrentProvider } from '../providers/provider.interface';
+import { AIService } from '../services/ai-service';
 import { SourceEngine } from '../services/source-engine';
 import { TorBoxAdapter } from '../services/torbox-adapter';
 import { createRouter } from './routes';
 
-export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: TorrentProvider[] } = {}): { app: Express; sourceEngine: SourceEngine; torboxAdapter: TorBoxAdapter } {
+export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: TorrentProvider[]; aiService?: AIService } = {}): { app: Express; sourceEngine: SourceEngine; torboxAdapter: TorBoxAdapter; aiService: AIService } {
   const app = express();
 
   app.use(cors());
@@ -20,6 +21,7 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
 
   const torboxAdapter = options.torboxAdapter ?? new TorBoxAdapter();
   const sourceEngine = new SourceEngine(torboxAdapter);
+  const aiService = options.aiService ?? new AIService();
 
   // Register built-in / default providers
   const defaultProviders: TorrentProvider[] = [
@@ -35,9 +37,9 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
     sourceEngine.registerProvider(provider);
   }
 
-  const router = createRouter(sourceEngine, torboxAdapter);
+  const router = createRouter(sourceEngine, torboxAdapter, aiService);
   app.use('/api', router);
   app.use('/', router); // Also serve directly at root for convenience
 
-  return { app, sourceEngine, torboxAdapter };
+  return { app, sourceEngine, torboxAdapter, aiService };
 }

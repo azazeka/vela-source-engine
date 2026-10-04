@@ -1,11 +1,16 @@
 import { Router, Request, Response } from 'express';
+import { AIService } from '../services/ai-service';
 import { CacheManager } from '../services/cache-manager';
 import { RankingEngine } from '../services/ranking-engine';
 import { SourceEngine } from '../services/source-engine';
 import { TorBoxAdapter, TorBoxError } from '../services/torbox-adapter';
-import { MediaRequest, QualityPreset } from '../types';
+import { CandidateSummary, MediaRequest, QualityPreset } from '../types';
 
-export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAdapter): Router {
+export function createRouter(
+  sourceEngine: SourceEngine,
+  torboxAdapter: TorBoxAdapter,
+  aiService: AIService = new AIService()
+): Router {
   const router = Router();
 
   // Helper to extract Bearer token if passed by tvOS client
@@ -15,6 +20,11 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       return auth.substring(7).trim();
     }
     return typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'].trim() : undefined;
+  };
+
+  const getGeminiKey = (req: Request): string | undefined => {
+    const key = req.headers['x-gemini-key'];
+    return typeof key === 'string' && key.trim().length > 0 ? key.trim() : undefined;
   };
 
   // 1. GET /health
@@ -50,7 +60,39 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
     }
   });
 
-  // Require an account for source caches and playback; health stays public.
+  // AI 1: POST /ai/discover - Semantic natural language & mood discovery
+  router.post('/ai/discover', async (req: Request, res: Response) => {
+    try {
+      const { prompt } = req.body;
+      if (!prompt || typeof prompt !== 'string') {
+        res.status(400).json({ error: 'Prompt is required and must be a string' });
+        return;
+      }
+      const customKey = getGeminiKey(req);
+      const result = await aiService.discover(prompt, customKey);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'AI discovery failed' });
+    }
+  });
+
+  // AI 2: POST /ai/explain-releases - Intelligent release comparator
+  router.post('/ai/explain-releases', async (req: Request, res: Response) => {
+    try {
+      const { title, releases } = req.body;
+      if (!title || !Array.isArray(releases)) {
+        res.status(400).json({ error: 'Title and releases array are required' });
+        return;
+      }
+      const customKey = getGeminiKey(req);
+      const result = await aiService.explainReleases(title, releases as CandidateSummary[], customKey);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'AI release explanation failed' });
+    }
+  });
+
+  // Require an account for source caches and playback; health & AI stay public.
   router.use((req, res, next) => {
     try { torboxAdapter.cacheScope(getApiKey(req)); next(); }
     catch { res.status(401).json({ error: 'TorBox API key is required.' }); }

@@ -131,3 +131,33 @@ export interface VersionsResponse {
   mediaKey: string;
   versions: PlayCandidate[];
 }
+
+export interface AIDiscoveryItem {
+  title: string;
+  year?: number;
+  reason: string;
+  searchKeyword: string;
+}
+
+export interface AIDiscoveryResponse {
+  query: string;
+  suggestions: AIDiscoveryItem[];
+  source: 'gemini' | 'heuristic';
+}
+
+export interface CandidateSummary {
+  candidateId: string;
+  quality: string;
+  hdr: string[];
+  audio: string[];
+  sizeBytes: number;
+  fileName: string;
+  rawReleaseName: string;
+}
+
+export interface AIReleaseExplanation {
+  headline: string;
+  summary: string;
+  bestCandidateId: string;
+  source: 'gemini' | 'heuristic';
+}
