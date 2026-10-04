@@ -162,6 +162,12 @@ export class SourceEngine {
 
     if (!selected) throw new TorBoxError('The selected version is unavailable.', 404);
 
+    // If the candidate was specifically requested and is not cached in TorBox,
+    // fail fast with a clear message rather than waiting 25s for TorBox to reject it.
+    if (candidateId && !selected.cached) {
+      throw new TorBoxError('This torrent is not cached in TorBox yet. Add it to your TorBox library first and wait for it to finish downloading.', 409);
+    }
+
     const stream = await this.torbox.requestDownloadLink(
       selected.torrentHash,
       selected.fileId,
