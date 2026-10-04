@@ -86,6 +86,7 @@ export class TorBoxAdapter {
         const ready = row.download_state === 'cached' ||
           row.download_state === 'completed' ||
           row.download_state === 'seeding' ||
+          row.download_state === 'uploading' ||
           (row.download_finished === true && row.download_present !== false);
         torrents.push({
           id, hash, name: String(row.name ?? ''), size: Number(row.size) || 0,
@@ -128,17 +129,24 @@ export class TorBoxAdapter {
       const form = new FormData();
       form.set('magnet', `magnet:?xt=urn:btih:${torrentHash.toLowerCase()}`);
       form.set('add_only_if_cached', 'true');
+      let createdId: number | undefined;
       try {
-        await this.request('torrents/createtorrent', apiKey, undefined, { method: 'POST', body: form });
+        const createRes = await this.request('torrents/createtorrent', apiKey, undefined, { method: 'POST', body: form });
+        const idVal = createRes?.torrent_id ?? createRes?.id;
+        if (idVal != null && Number.isSafeInteger(Number(idVal))) {
+          createdId = Number(idVal);
+        }
       } catch (error) {
         if (error instanceof TorBoxError && /HTTP (400|404)\./.test(error.message)) {
           throw new TorBoxError('This torrent is not cached or could not be added to your TorBox library.', 409);
         }
         throw error;
       }
-      for (let attempt = 0; attempt < 12; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 600));
-        torrent = (await this.listTorrents(apiKey)).find(t => t.hash === torrentHash.toLowerCase());
+      for (let attempt = 0; attempt < 25; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const list = await this.listTorrents(apiKey);
+        torrent = (createdId != null ? list.find(t => t.id === createdId) : undefined)
+          ?? list.find(t => t.hash === torrentHash.toLowerCase());
         if (torrent?.ready && torrent.files.length > 0) break;
       }
     }
