@@ -99,21 +99,18 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
     }
   });
 
-  // 4b. POST /sources/adult/search (Direct adult content search by query)
+  // 4b. POST /sources/adult/search (Adult content search & catalog browse)
   router.post('/sources/adult/search', async (req: Request, res: Response) => {
     try {
       const query = typeof req.body.query === 'string' ? req.body.query.trim() : '';
       const preset = (req.body.preset as QualityPreset) || 'best';
-      if (!query) {
-        res.status(400).json({ error: 'Query parameter is required' });
-        return;
-      }
+      const effectiveQuery = query || 'Trending';
 
       const request: MediaRequest = {
         type: 'movie',
         tmdbId: -1,
-        title: query,
-        originalTitle: query,
+        title: effectiveQuery,
+        originalTitle: effectiveQuery,
         year: new Date().getFullYear(),
         isAdult: true,
       };
@@ -121,7 +118,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       const apiKey = getApiKey(req);
       const candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
       res.json({
-        query,
+        query: effectiveQuery,
         mediaKey: sourceEngine.getMediaKey(request),
         candidates,
       });

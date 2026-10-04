@@ -105,7 +105,7 @@ describe('SourceEngine and REST API', () => {
     }
   });
 
-  it('searches adult sources and rejects empty queries', async () => {
+  it('searches adult sources and returns trending on empty query', async () => {
     const { app } = createApp({ torboxAdapter: fixtureAdapter() });
     const server = app.listen(0, '127.0.0.1');
     await new Promise<void>(resolve => server.once('listening', resolve));
@@ -113,7 +113,10 @@ describe('SourceEngine and REST API', () => {
     const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer account-a' };
     try {
       const emptyRes = await fetch(`${base}/sources/adult/search`, { method: 'POST', headers, body: JSON.stringify({ query: '   ' }) });
-      assert.equal(emptyRes.status, 400);
+      assert.equal(emptyRes.status, 200);
+      const emptyData = await emptyRes.json() as any;
+      assert.equal(emptyData.query, 'Trending');
+      assert.ok(emptyData.mediaKey.startsWith('adult:'));
 
       const validRes = await fetch(`${base}/sources/adult/search`, { method: 'POST', headers, body: JSON.stringify({ query: 'Brazzers Eva' }) });
       assert.equal(validRes.status, 200);

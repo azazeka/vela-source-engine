@@ -192,9 +192,11 @@ export class PornolabProvider implements TorrentProvider {
 
   public async search(request: MediaRequest): Promise<RawRelease[]> {
     const rawQuery = request.title?.trim() || request.originalTitle?.trim() || '';
-    if (!rawQuery) return [];
+    const isTrending = !rawQuery || rawQuery.toLowerCase() === 'trending' || rawQuery.toLowerCase() === 'popular';
 
-    const path = `/forum/tracker.php?nm=${encodeURIComponent(rawQuery)}`;
+    const path = isTrending
+      ? `/forum/tracker.php?o=10&s=2`
+      : `/forum/tracker.php?nm=${encodeURIComponent(rawQuery)}&o=10&s=2`;
 
     try {
       const { html, mirror } = await this.fetchHtml(path);

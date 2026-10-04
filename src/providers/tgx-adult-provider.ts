@@ -181,11 +181,13 @@ export class TgxAdultProvider implements TorrentProvider {
 
   public async search(request: MediaRequest): Promise<RawRelease[]> {
     const rawQuery = request.title?.trim() || request.originalTitle?.trim() || '';
-    if (!rawQuery) return [];
+    const isTrending = !rawQuery || rawQuery.toLowerCase() === 'trending' || rawQuery.toLowerCase() === 'popular';
 
     // Filter adult video categories: c40 (HD Movies), c41, c42 (HD Episodes), c43 (Packs), c44 (SD Movies), c45 (SD Episodes), c46 (4K UHD), c47 (VR), c50 (Other)
     const adultCats = 'c40=1&c41=1&c42=1&c43=1&c44=1&c45=1&c46=1&c47=1&c50=1';
-    const path = `/torrents.php?search=${encodeURIComponent(rawQuery)}&${adultCats}&sort=seeders&order=desc`;
+    const path = isTrending
+      ? `/torrents.php?${adultCats}&sort=seeders&order=desc`
+      : `/torrents.php?search=${encodeURIComponent(rawQuery)}&${adultCats}&sort=seeders&order=desc`;
 
     try {
       const { html, mirror } = await this.fetchHtml(path);
