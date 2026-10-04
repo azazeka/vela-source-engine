@@ -104,4 +104,26 @@ describe('SourceEngine and REST API', () => {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
   });
+
+  it('searches adult sources and rejects empty queries', async () => {
+    const { app } = createApp({ torboxAdapter: fixtureAdapter() });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer account-a' };
+    try {
+      const emptyRes = await fetch(`${base}/sources/adult/search`, { method: 'POST', headers, body: JSON.stringify({ query: '   ' }) });
+      assert.equal(emptyRes.status, 400);
+
+      const validRes = await fetch(`${base}/sources/adult/search`, { method: 'POST', headers, body: JSON.stringify({ query: 'Brazzers Eva' }) });
+      assert.equal(validRes.status, 200);
+      const data = await validRes.json() as any;
+      assert.equal(data.query, 'Brazzers Eva');
+      assert.ok(data.mediaKey.startsWith('adult:'));
+      assert.ok(Array.isArray(data.candidates));
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
 });

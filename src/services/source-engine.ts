@@ -26,6 +26,9 @@ export class SourceEngine {
   }
 
   public getMediaKey(request: MediaRequest): string {
+    if (request.isAdult) {
+      return `adult:${encodeURIComponent(request.title.toLowerCase().trim())}`;
+    }
     if (request.type === 'movie') {
       return `movie:${request.tmdbId}`;
     }
@@ -49,7 +52,14 @@ export class SourceEngine {
     // Provider fan-out with bounded searches; account pagination may take longer than a single request.
     const rawReleases: RawRelease[] = [];
     const providerErrors: unknown[] = [];
-    const searchPromises = this.providers.map(async (provider) => {
+    const targetProviders = this.providers.filter((provider) => {
+      if (request.isAdult) {
+        return provider.isAdult === true || provider.id === 'torbox-library' || provider.id.startsWith('torznab');
+      }
+      return !provider.isAdult;
+    });
+
+    const searchPromises = targetProviders.map(async (provider) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const timeoutPromise = new Promise<RawRelease[]>((_, reject) => {

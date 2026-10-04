@@ -4,6 +4,15 @@ import { Normalizer } from '../src/services/normalizer';
 import { RawRelease } from '../src/types';
 
 describe('Normalizer', () => {
+  it('retains Torlock attribution for duplicate hashes regardless of response order', () => {
+    const primary: RawRelease = { provider: 'torznab-torlock', name: 'Movie.2024.1080p.WEB-DL',
+      infoHash: 'a'.repeat(40), sizeBytes: 4e9, seeders: 5 };
+    const fallback = { ...primary, provider: 'rutor', seeders: 120 };
+    for (const releases of [[primary, fallback], [fallback, primary]]) {
+      assert.strictEqual(Normalizer.normalize(releases)[0].provider, 'torznab-torlock');
+    }
+  });
+
   it('deduplicates identical infoHash keeping highest seeders', () => {
     const rawReleases: RawRelease[] = [
       {

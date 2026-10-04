@@ -83,7 +83,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
     try {
       const request = req.body.request as MediaRequest;
       const preset = (req.body.preset as QualityPreset) || 'best';
-      if (!request || !request.tmdbId || !request.title) {
+      if (!request || (!request.isAdult && !request.tmdbId) || !request.title) {
         res.status(400).json({ error: 'Invalid MediaRequest payload' });
         return;
       }
@@ -91,6 +91,37 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       const apiKey = getApiKey(req);
       const candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
       res.json({
+        mediaKey: sourceEngine.getMediaKey(request),
+        candidates,
+      });
+    } catch (err: any) {
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+    }
+  });
+
+  // 4b. POST /sources/adult/search (Direct adult content search by query)
+  router.post('/sources/adult/search', async (req: Request, res: Response) => {
+    try {
+      const query = typeof req.body.query === 'string' ? req.body.query.trim() : '';
+      const preset = (req.body.preset as QualityPreset) || 'best';
+      if (!query) {
+        res.status(400).json({ error: 'Query parameter is required' });
+        return;
+      }
+
+      const request: MediaRequest = {
+        type: 'movie',
+        tmdbId: -1,
+        title: query,
+        originalTitle: query,
+        year: new Date().getFullYear(),
+        isAdult: true,
+      };
+
+      const apiKey = getApiKey(req);
+      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
+      res.json({
+        query,
         mediaKey: sourceEngine.getMediaKey(request),
         candidates,
       });
@@ -126,7 +157,7 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       const candidateId = req.body.candidateId as string | undefined;
       const preset = (req.body.preset as QualityPreset) || 'best';
 
-      if (!request || !request.tmdbId || !request.title) {
+      if (!request || (!request.isAdult && !request.tmdbId) || !request.title) {
         res.status(400).json({ error: 'Invalid MediaRequest payload' });
         return;
       }

@@ -4,6 +4,24 @@ import { RankingEngine } from '../src/services/ranking-engine';
 import { PlayCandidate } from '../src/types';
 
 describe('RankingEngine', () => {
+  it('prefers cached Torlock versions and keeps cached fallbacks above uncached Torlock', () => {
+    const primary: PlayCandidate = {
+      candidateId: 'primary', mediaKey: 'movie:1', quality: '1080p', hdr: ['sdr'],
+      videoCodec: 'h264', audio: [], channels: null, source: 'web_dl_encode',
+      sizeBytes: 4e9, cached: true, torrentHash: 'a'.repeat(40), fileId: 1,
+      fileName: 'Movie.mkv', provider: 'torznab-torlock', rawReleaseName: 'Movie.1080p.WEB-DL',
+      score: 0, badges: [],
+    };
+    const fallback: PlayCandidate = { ...primary, candidateId: 'fallback', provider: 'rutor',
+      quality: '2160p', hdr: ['dolby_vision'], source: 'bluray_remux' };
+    const uncached = { ...fallback, candidateId: 'uncached', provider: 'torznab-torlock', cached: false };
+    for (const preset of ['best', 'balanced', 'data_saver'] as const) {
+      assert.deepStrictEqual(RankingEngine.rank([fallback, uncached, primary], preset).map(c => c.candidateId),
+        ['primary', 'fallback', 'uncached']);
+      assert.strictEqual(RankingEngine.rank([uncached, fallback], preset)[0].candidateId, 'fallback');
+    }
+  });
+
   it('ranks cached 4K REMUX with DV and Atmos above 1080p and uncached', () => {
     const candidates: PlayCandidate[] = [
       {

@@ -36,9 +36,12 @@ export class Normalizer {
         parsed,
       };
 
-      // Deduplication by infoHash: if already seen, retain the one with higher seeders
+      // Keep primary-source attribution when the same hash is also found elsewhere.
       const existing = dedupeMap.get(cleanHash);
-      if (!existing || normalized.seeders > existing.seeders) {
+      const isPrimary = normalized.provider === 'torznab-torlock';
+      const existingIsPrimary = existing?.provider === 'torznab-torlock';
+      if (!existing || (isPrimary && !existingIsPrimary)
+        || (isPrimary === existingIsPrimary && normalized.seeders > existing.seeders)) {
         dedupeMap.set(cleanHash, normalized);
       }
     }

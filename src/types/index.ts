@@ -11,6 +11,7 @@ export interface MediaRequest {
   episode?: number;
   seriesTitle?: string;
   episodeTitle?: string;
+  isAdult?: boolean;
 }
 
 export interface RawRelease {

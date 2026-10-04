@@ -1,7 +1,8 @@
 import cors from 'cors';
 import express, { Express } from 'express';
-import { NyaaProvider } from '../providers/nyaa-provider';
+import { PornolabProvider } from '../providers/pornolab-provider';
 import { RutorProvider } from '../providers/rutor-provider';
+import { TgxAdultProvider } from '../providers/tgx-adult-provider';
 import { TorBoxLibraryProvider } from '../providers/torbox-library-provider';
 import { createConfiguredTorznabProviders } from '../providers/torznab-provider';
 import { YtsProvider } from '../providers/yts-provider';
@@ -21,12 +22,13 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
 
   // Register built-in / default providers
   const defaultProviders: TorrentProvider[] = [
+    ...createConfiguredTorznabProviders(),
     new TorBoxLibraryProvider(torboxAdapter),
     new RutorProvider(),
     new YtsProvider(),
-    new NyaaProvider(),
+    new TgxAdultProvider(),
+    new PornolabProvider(),
   ];
-  defaultProviders.push(...createConfiguredTorznabProviders());
   for (const provider of options.providers ?? defaultProviders) {
     sourceEngine.registerProvider(provider);
   }

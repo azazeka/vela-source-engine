@@ -57,7 +57,7 @@ export class TorznabProvider implements TorrentProvider {
     readonly name = 'Torznab'
   ) {}
 
-  private url(query?: string): URL {
+  private url(query?: string, isAdult?: boolean): URL {
     let url: URL;
     try { url = new URL(this.endpoint); } catch { throw new Error('Torznab endpoint is not configured.'); }
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
@@ -70,7 +70,11 @@ export class TorznabProvider implements TorrentProvider {
     if (query !== undefined) {
       url.searchParams.set('q', query);
       url.searchParams.set('limit', '100');
-      if (this.categories) url.searchParams.set('cat', this.categories);
+      if (this.categories) {
+        url.searchParams.set('cat', this.categories);
+      } else if (isAdult) {
+        url.searchParams.set('cat', '6000');
+      }
     }
     if (this.apiKey) url.searchParams.set('apikey', this.apiKey);
     return url;
@@ -87,6 +91,15 @@ export class TorznabProvider implements TorrentProvider {
 
   async search(request: MediaRequest): Promise<RawRelease[]> {
     if (!this.endpoint) return [];
+    if (request.isAdult) {
+      const title = (request.title || request.originalTitle || '').replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!title) return [];
+      const response = await this.get(this.url(title, true));
+      if (!response.ok) throw new Error(`Torznab indexer returned HTTP ${response.status}.`);
+      const xml = await response.text();
+      if (xml.length > 2_000_000) throw new Error('Torznab response is too large.');
+      return this.parseReleasesFromXml(xml);
+    }
     const rawTitle = request.type === 'episode' ? (request.seriesTitle || request.originalTitle || request.title) :
       (request.originalTitle || request.title);
     const title = rawTitle.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -244,7 +257,6 @@ export function createConfiguredTorznabProviders(
   // These public endpoints document anonymous Torznab access. Keep this list
   // small and explicit: media search terms are sent to each configured source.
   return [
-    new TorznabProvider('https://anibt.net/torznab/api', '', fetch, '5070', 'torznab-anibt', 'AniBT'),
     new TorznabProvider('https://www.torlock.com/torznab/api', '', fetch, '', 'torznab-torlock', 'Torlock'),
   ];
 }

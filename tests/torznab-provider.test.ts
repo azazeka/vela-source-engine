@@ -7,6 +7,20 @@ import { movieRequest, episodeRequest } from './torbox-fixtures';
 const hash = 'a'.repeat(40);
 
 describe('TorznabProvider', () => {
+  it('uses only Torlock as the default public indexer', () => {
+    const previous = { ...process.env };
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.TORZNAB_INDEXERS_JSON;
+      delete process.env.TORZNAB_URL;
+      assert.deepEqual(createConfiguredTorznabProviders().map(provider => [provider.id, provider.name]), [
+        ['torznab-torlock', 'Torlock'],
+      ]);
+    } finally {
+      process.env = previous;
+    }
+  });
+
   it('loads multiple indexers from backend configuration', () => {
     const providers = createConfiguredTorznabProviders(JSON.stringify([
       { id: 'catalog-a', name: 'Catalog A', url: 'https://a.example/api', apiKey: 'key-a' },
