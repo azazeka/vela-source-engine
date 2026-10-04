@@ -1,3 +1,8 @@
+// Automatically load .env if present
+try {
+  (process as any).loadEnvFile?.();
+} catch {}
+
 import { createApp } from './api/server';
 
 const PORT = Number(process.env.PORT) || 3000;

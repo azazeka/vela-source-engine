@@ -1,5 +1,9 @@
 import cors from 'cors';
 import express, { Express } from 'express';
+import { BitsearchAdultProvider } from '../providers/bitsearch-adult-provider';
+import { GayTorrentRuProvider } from '../providers/gaytorrent-ru-provider';
+import { GayTorrentsNetProvider } from '../providers/gay-torrents-net-provider';
+import { PornolabGayProvider } from '../providers/pornolab-gay-provider';
 import { PornolabProvider } from '../providers/pornolab-provider';
 import { RutorProvider } from '../providers/rutor-provider';
 import { TgxAdultProvider } from '../providers/tgx-adult-provider';
@@ -31,7 +35,11 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
     new YtsProvider(),
     new TgxAdultProvider(),
     new PornolabProvider(),
+    new PornolabGayProvider(),
+    new GayTorrentRuProvider(),
+    new GayTorrentsNetProvider(),
     new TpbAdultProvider(),
+    new BitsearchAdultProvider(),
   ];
   for (const provider of options.providers ?? defaultProviders) {
     sourceEngine.registerProvider(provider);

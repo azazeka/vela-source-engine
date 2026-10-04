@@ -60,8 +60,26 @@ DEPLOY_CMD=(
     --env-vars "NODE_ENV=production" "PORT=${TARGET_PORT}" "HOST=0.0.0.0"
 )
 
+# Load .env if present
+if [ -f "${BACKEND_DIR}/.env" ]; then
+    echo "📄 Sourcing environment from .env..."
+    set -a
+    # shellcheck disable=SC1091
+    source "${BACKEND_DIR}/.env"
+    set +a
+fi
+
 if [ -n "${TORBOX_API_KEY:-}" ]; then
     DEPLOY_CMD+=(--env-vars "TORBOX_API_KEY=${TORBOX_API_KEY}")
+fi
+if [ -n "${PORNOLAB_COOKIE:-}" ]; then
+    DEPLOY_CMD+=(--env-vars "PORNOLAB_COOKIE=${PORNOLAB_COOKIE}")
+fi
+if [ -n "${GAYTORRENT_COOKIE:-}" ]; then
+    DEPLOY_CMD+=(--env-vars "GAYTORRENT_COOKIE=${GAYTORRENT_COOKIE}")
+fi
+if [ -n "${GTO_COOKIE:-}" ]; then
+    DEPLOY_CMD+=(--env-vars "GTO_COOKIE=${GTO_COOKIE}")
 fi
 
 "${DEPLOY_CMD[@]}"

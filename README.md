@@ -225,8 +225,23 @@ Blacklists failed stream candidate and automatically returns fallback stream.
 | `TORZNAB_API_KEY` | *(empty)* | Optional API key for the configured Torznab indexer |
 | `TORZNAB_CATEGORIES` | *(empty)* | Optional comma-separated category IDs supported by that indexer |
 | `TORZNAB_INDEXERS_JSON` | *(built-in public sources)* | Optional JSON array of indexers; overrides the built-in sources and supports separate keys/categories per source |
+| `PORNOLAB_COOKIE` | *(empty)* | Optional cookie for Pornolab search authentication (`bb_session` or full cookie) |
+| `PORNOLAB_GAY_COOKIE` | *(falls back to PORNOLAB_COOKIE)* | Optional dedicated cookie for Pornolab Gay provider |
+| `GAYTORRENT_COOKIE` | *(empty)* | Optional session cookie for GayTorrent.ru (`gaytor.rent`) private tracker |
+| `GTO_COOKIE` | *(empty)* | Optional session cookie for Gay-Torrents.net (`gay-torrents.net`) tracker |
+| `TGX_URL` | *(default mirrors)* | Optional custom TorrentGalaxy mirror |
+| `TPB_API_URL` | `https://apibay.org` | Optional custom ThePirateBay apibay endpoint |
+| `BITSEARCH_URL` | *(default bitsearch.eu)* | Optional custom BitSearch mirror / endpoint |
 | `CORS_ORIGIN` | `*` | Allowed CORS origins for browser/API clients |
 | `LOG_LEVEL` | `info` | Logger verbosity |
+
+### Adult & Gay adult native providers
+Vela includes dedicated adult providers for search and streaming through TorBox:
+- **`pornolab`** & **`pornolab-gay`**: Searches Pornolab, with `pornolab-gay` strictly filtering to gay subforums (903, 1755, 1765, 1787, 1767, 1763, 1777, 1691) for movies, HD, and studio packs.
+- **`gaytorrent-ru`**: Specialized GayTorrent.ru / `gaytor.rent` parser supporting authenticated sessions via `GAYTORRENT_COOKIE`.
+- **`gay-torrents-net`**: Specialized Gay-Torrents.net international tracker parser supporting sessions via `GTO_COOKIE`.
+- **`bitsearch-adult`**: Public high-speed JSON REST API search for adult & gay releases with zero authentication, keys, or cookies required.
+- **`tpb-adult`** & **`tgx-adult`**: General adult indexers (Apibay/TPB category 500 and TorrentGalaxy XXX categories).
 
 ## Source and playback boundaries
 
