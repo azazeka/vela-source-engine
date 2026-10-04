@@ -180,7 +180,7 @@ export class ReleaseParser {
   private static parseLanguages(lower: string): string[] {
     const langs: string[] = [];
     if (/\b(multi|multilingual|multi[- ]?audio)\b/i.test(lower)) langs.push('multi');
-    if (/\b(rus|russian|русский|дубляж|itunes ru)\b/i.test(lower)) langs.push('ru');
+    if (/\b(rus|russian|русский|дубляж|itunes ru|mvo|avo|dub|lostfilm|hdrezka|hd-rezka|red head sound|rhs|кубик в кубе)\b/i.test(lower)) langs.push('ru');
     if (/\b(eng|english|en)\b/i.test(lower)) langs.push('en');
     if (/\b(dual|dual[- ]?audio)\b/i.test(lower)) langs.push('dual');
     return langs;
@@ -216,8 +216,8 @@ export class ReleaseParser {
       };
     }
 
-    // Season pack: S01, Season 1, Seasons 1-3, Complete Series
-    const seasonOnly = clean.match(/\bS(\d{1,2})\b/i) || clean.match(/\bSeason\s*(\d{1,2})\b/i);
+    // Season pack: S01, Season 1, Seasons 1-3, Complete Series, Сезон 1, Сезоны 1-3
+    const seasonOnly = clean.match(/\bS(\d{1,2})\b/i) || clean.match(/\b(?:Season|Сезон)\s*(\d{1,2})\b/i);
     if (seasonOnly) {
       return {
         season: parseInt(seasonOnly[1], 10),
@@ -226,7 +226,7 @@ export class ReleaseParser {
       };
     }
 
-    if (/\b(complete series|all seasons|seasons \d+[-–]\d+)\b/i.test(clean)) {
+    if (/\b(complete series|all seasons|seasons \d+[-–]\d+|сезоны \d+[-–]\d+|все сезоны|полный сезон)\b/i.test(clean)) {
       return {
         season: null,
         episode: null,

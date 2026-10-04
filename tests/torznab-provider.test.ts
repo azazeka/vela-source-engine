@@ -37,6 +37,30 @@ describe('TorznabProvider', () => {
     assert.equal(results[0].seeders, 45);
   });
 
+  it('parses non-standard XML formats, namespaces, description-embedded sizes and unquoted attributes', async () => {
+    const provider = new TorznabProvider('https://indexer.example/api', '', (async () => {
+      return new Response(`
+        <rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2014/descriptions/extended">
+          <channel>
+            <item>
+              <torznab:title>Oppenheimer.2023.2160p.UHD.Remux</torznab:title>
+              <guid>https://indexer.example/details/${hash}</guid>
+              <description>Audio: TrueHD Atmos | Размер: 54.2 GB | Seeders: 120</description>
+              <torznab:attr name=seeds value=120 />
+            </item>
+          </channel>
+        </rss>
+      `);
+    }) as typeof fetch);
+
+    const results = await provider.search(movieRequest);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].name, 'Oppenheimer.2023.2160p.UHD.Remux');
+    assert.equal(results[0].infoHash, hash);
+    assert.equal(results[0].seeders, 120);
+    assert.equal(results[0].sizeBytes, Math.round(54.2 * 1024 * 1024 * 1024));
+  });
+
   it('uses the series title and exact episode in its query', async () => {
     let query = '';
     const provider = new TorznabProvider('https://indexer.example/api', '', (async (input: any) => {

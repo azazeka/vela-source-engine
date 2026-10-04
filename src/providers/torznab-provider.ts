@@ -11,14 +11,15 @@ function decodeXml(value: string): string {
 
 function tag(item: string, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = item.match(new RegExp(`<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}\\s*>`, 'i'));
+  const match = item.match(new RegExp(`<(?:[\\w.-]+:)?${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[\\w.-]+:)?${escaped}\\s*>`, 'i'));
   return match ? decodeXml(match[1]) : undefined;
 }
 
 function attribute(item: string, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = item.match(new RegExp(`\\b${escaped}\\s*=\\s*(["'])(.*?)\\1`, 'i'));
-  return match ? decodeXml(match[2]) : undefined;
+  const match = item.match(new RegExp(`\\b${escaped}\\s*=\\s*(?:(["'])(.*?)\\1|([^\\s>]+))`, 'i'));
+  if (!match) return undefined;
+  return decodeXml(match[2] !== undefined ? match[2] : match[3]);
 }
 
 function torznabAttribute(item: string, name: string): string | undefined {
@@ -86,8 +87,9 @@ export class TorznabProvider implements TorrentProvider {
 
   async search(request: MediaRequest): Promise<RawRelease[]> {
     if (!this.endpoint) return [];
-    const title = request.type === 'episode' ? (request.seriesTitle || request.originalTitle || request.title) :
+    const rawTitle = request.type === 'episode' ? (request.seriesTitle || request.originalTitle || request.title) :
       (request.originalTitle || request.title);
+    const title = rawTitle.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
     const query = request.type === 'episode'
       ? `${title} S${String(request.season ?? 1).padStart(2, '0')}E${String(request.episode ?? 1).padStart(2, '0')}`
       : `${title} ${request.year}`;
@@ -95,6 +97,34 @@ export class TorznabProvider implements TorrentProvider {
     if (!response.ok) throw new Error(`Torznab indexer returned HTTP ${response.status}.`);
     const xml = await response.text();
     if (xml.length > 2_000_000) throw new Error('Torznab response is too large.');
+    let releases = this.parseReleasesFromXml(xml);
+
+    // If no releases found, try searching with alternative title (e.g. localized Russian vs original English)
+    if (releases.length === 0 && request.title && request.originalTitle) {
+      const altTitleRaw = rawTitle === request.originalTitle ? request.title : request.originalTitle;
+      const altTitle = altTitleRaw.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (altTitle && altTitle.toLowerCase() !== title.toLowerCase()) {
+        const altQuery = request.type === 'episode'
+          ? `${altTitle} S${String(request.season ?? 1).padStart(2, '0')}E${String(request.episode ?? 1).padStart(2, '0')}`
+          : `${altTitle} ${request.year}`;
+        if (altQuery !== query) {
+          try {
+            const altResponse = await this.get(this.url(altQuery));
+            if (altResponse.ok) {
+              const altXml = await altResponse.text();
+              releases = this.parseReleasesFromXml(altXml);
+            }
+          } catch {
+            // Ignore secondary fallback errors
+          }
+        }
+      }
+    }
+
+    return releases;
+  }
+
+  private parseReleasesFromXml(xml: string): RawRelease[] {
     const items = xml.match(/<item\b[^>]*>[\s\S]*?<\/item\s*>/gi) ?? [];
     const releases: RawRelease[] = [];
     for (const item of items) {
@@ -102,13 +132,51 @@ export class TorznabProvider implements TorrentProvider {
       const enclosure = item.match(/<enclosure\b[^>]*\/?\s*>/i)?.[0];
       const candidateLink = [tag(item, 'link'), tag(item, 'guid'), enclosure && attribute(enclosure, 'url'),
         torznabAttribute(item, 'magneturl')].find(value => value?.startsWith('magnet:'));
-      const hash = torznabAttribute(item, 'infohash') ?? (candidateLink ? magnetHash(candidateLink) : undefined);
+      let hash = torznabAttribute(item, 'infohash') ?? (candidateLink ? magnetHash(candidateLink) : undefined);
+      if (!hash) {
+        const anyLink = [enclosure && attribute(enclosure, 'url'), tag(item, 'link'), tag(item, 'guid'),
+          torznabAttribute(item, 'magneturl')].find(value => Boolean(value));
+        if (anyLink) {
+          const match = anyLink.match(/\b([a-f\d]{40}|[a-z2-7]{32})\b/i);
+          if (match) {
+            hash = magnetHash(`magnet:?xt=urn:btih:${match[1]}`);
+          }
+        }
+      }
       const normalizedHash = hash ? magnetHash(`magnet:?xt=urn:btih:${hash}`) : undefined;
       if (!name || !normalizedHash) continue;
-      const sizeValue = torznabAttribute(item, 'size') ?? tag(item, 'size') ??
-        item.match(/<enclosure\b[^>]*\blength\s*=\s*["'](\d+)["']/i)?.[1];
-      const size = Number(sizeValue);
-      const seeders = Number(torznabAttribute(item, 'seeders'));
+      let sizeValue = torznabAttribute(item, 'size') ?? tag(item, 'size') ??
+        torznabAttribute(item, 'length') ??
+        item.match(/<enclosure\b[^>]*\blength\s*=\s*(?:["']?(\d+)["']?)/i)?.[1];
+      let size = Number(sizeValue);
+      if (!Number.isSafeInteger(size) || size <= 0) {
+        const desc = tag(item, 'description') ?? '';
+        const sizeMatch = desc.match(/(?:size|размер)\s*:\s*([\d.,]+)\s*(gb|mb|tb|гб|мб|тб|bytes|b)/i);
+        if (sizeMatch) {
+          const val = parseFloat(sizeMatch[1].replace(',', '.'));
+          const unit = sizeMatch[2].toLowerCase();
+          const multipliers: Record<string, number> = {
+            'gb': 1024 * 1024 * 1024,
+            'гб': 1024 * 1024 * 1024,
+            'mb': 1024 * 1024,
+            'мб': 1024 * 1024,
+            'tb': 1024 * 1024 * 1024 * 1024,
+            'тб': 1024 * 1024 * 1024 * 1024,
+            'b': 1,
+            'bytes': 1
+          };
+          if (multipliers[unit]) {
+            size = Math.round(val * multipliers[unit]);
+          }
+        }
+      }
+
+      const seedersVal = torznabAttribute(item, 'seeders') ??
+        torznabAttribute(item, 'seeds') ??
+        tag(item, 'seeders') ??
+        (tag(item, 'description') ?? '').match(/(?:seeders?|seeds?|раздают|сиды)\s*:\s*(\d+)/i)?.[1];
+      const seeders = Number(seedersVal);
+
       releases.push({
         provider: this.id,
         name,

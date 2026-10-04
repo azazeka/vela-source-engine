@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "tsc && node dist/src/index.js",
     "dev": "tsc -w",
-    "test": "tsc && node --test dist/tests/**/*.test.js"
+    "test": "tsc && NODE_ENV=test node --test dist/tests/**/*.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
