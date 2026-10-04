@@ -83,10 +83,14 @@ export class TorBoxAdapter {
         const id = Number(row.id);
         const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
         if (row.id == null || !Number.isSafeInteger(id) || id < 0 || !/^[a-f0-9]{40}$/.test(hash)) continue;
+        const ready = row.download_state === 'cached' ||
+          row.download_state === 'completed' ||
+          row.download_state === 'seeding' ||
+          (row.download_finished === true && row.download_present !== false);
         torrents.push({
           id, hash, name: String(row.name ?? ''), size: Number(row.size) || 0,
           files: this.files(row.files),
-          ready: row.download_finished === true && row.download_present !== false,
+          ready,
         });
       }
       if (data.length < pageSize) return torrents;
@@ -132,15 +136,46 @@ export class TorBoxAdapter {
         }
         throw error;
       }
-      for (let attempt = 0; attempt < 6; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      for (let attempt = 0; attempt < 12; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 600));
         torrent = (await this.listTorrents(apiKey)).find(t => t.hash === torrentHash.toLowerCase());
-        if (torrent?.ready) break;
+        if (torrent?.ready && torrent.files.length > 0) break;
       }
     }
     if (!torrent) throw new TorBoxError('TorBox did not add this cached torrent to your library.', 409);
     if (!torrent.ready) throw new TorBoxError('This torrent is still downloading.', 409);
-    const file = request ? FileMatcher.matchFile(request, torrent.files) : torrent.files.find(f => f.id === fileId);
+
+    // 1. Match using request metadata
+    let file = request ? FileMatcher.matchFile(request, torrent.files) : null;
+
+    // 2. Fall back to fileId if provided
+    if (!file && fileId > 0) {
+      file = torrent.files.find(f => f.id === fileId) || null;
+    }
+
+    // 3. Fall back to picking video file directly if matching was too strict
+    if (!file && torrent.files.length > 0) {
+      const videoFiles = torrent.files.filter((f) => {
+        const lower = f.name.toLowerCase();
+        const isVideo = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|webm)$/i.test(f.name);
+        const isSample = /\b(sample|trailer|extras|bonus|featurette)\b/i.test(lower);
+        return isVideo && !isSample;
+      });
+
+      if (videoFiles.length === 1) {
+        file = videoFiles[0];
+      } else if (videoFiles.length > 1) {
+        if (request?.type === 'movie') {
+          videoFiles.sort((a, b) => b.size - a.size);
+          file = videoFiles[0];
+        } else if (request?.type === 'episode') {
+          const ep = request.episode ?? 1;
+          const epPad = String(ep).padStart(2, '0');
+          file = videoFiles.find(f => new RegExp(`(?:^|[^\\d])${epPad}(?:[^\\d]|$)`).test(f.name)) || videoFiles[0];
+        }
+      }
+    }
+
     if (!file) throw new TorBoxError('The requested media file is unavailable.', 404);
     const data = await this.request('torrents/requestdl', apiKey, new URLSearchParams({
       torrent_id: String(torrent.id), file_id: String(file.id), redirect: 'false', zip_link: 'false',

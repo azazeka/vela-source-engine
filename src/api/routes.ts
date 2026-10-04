@@ -132,9 +132,12 @@ export function createRouter(sourceEngine: SourceEngine, torboxAdapter: TorBoxAd
       }
 
       const apiKey = getApiKey(req);
+      console.log(`[PlayResolve] Starting resolve for tmdbId=${request.tmdbId} title="${request.title}" candidateId=${candidateId ?? 'auto'}`);
       const result = await sourceEngine.resolvePlay(request, candidateId, preset, apiKey);
+      console.log(`[PlayResolve] Successfully resolved stream for "${result.candidate.fileName}"`);
       res.json(result);
     } catch (err: any) {
+      console.error(`[PlayResolve Error] ${err.message} (status: ${err.statusCode || 500})`);
       res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
     }
   });

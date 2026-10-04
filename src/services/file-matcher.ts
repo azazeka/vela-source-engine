@@ -1,6 +1,6 @@
 import { MediaRequest, TorBoxFile } from '../types';
 
-const VIDEO_EXTENSIONS = new Set(['.mkv', '.mp4', '.m4v', '.mov', '.avi', '.ts', '.m2ts']);
+const VIDEO_EXTENSIONS = new Set(['.mkv', '.mp4', '.m4v', '.mov', '.avi', '.ts', '.m2ts', '.webm']);
 
 export class FileMatcher {
   public static matchFile(request: MediaRequest, files: TorBoxFile[]): TorBoxFile | null {
@@ -34,6 +34,11 @@ export class FileMatcher {
   }
 
   private static matchEpisode(request: MediaRequest, videoFiles: TorBoxFile[]): TorBoxFile | null {
+    // If there is only one primary video file in the torrent, it is a single-episode release
+    if (videoFiles.length === 1) {
+      return videoFiles[0];
+    }
+
     const season = request.season ?? 1;
     const episode = request.episode ?? 1;
 
@@ -44,8 +49,8 @@ export class FileMatcher {
     const metaMatch = videoFiles.find((f) => f.s_num === season && f.e_num === episode);
     if (metaMatch) return metaMatch;
 
-    // 2. Strict regex matching on file name
-    // Matches S01E02 or S1E2 or 1x02 or E02
+    // 2. Regex matching on file name
+    // Matches S01E02, S1E2, 1x02, E02, EP02, Episode 02, Серия 02, or " 02."
     const patterns = [
       new RegExp(`\\bS0?${season}E0?${episode}\\b`, 'i'),
       new RegExp(`\\b${season}x0?${episode}\\b`, 'i'),
@@ -53,6 +58,7 @@ export class FileMatcher {
       new RegExp(`\\bEP0?${episode}\\b`, 'i'),
       new RegExp(`\\bEpisode\\s*0?${episode}\\b`, 'i'),
       new RegExp(`\\bСерия\\s*0?${episode}\\b`, 'i'),
+      new RegExp(`(?:^|[^\\d])${ePad}(?:[^\\d]|$)`, 'i'),
     ];
 
     for (const pattern of patterns) {
