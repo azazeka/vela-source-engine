@@ -118,20 +118,48 @@ export class TorBoxAdapter {
     return result;
   }
 
+  public async getTorrentById(id: number, apiKey?: string): Promise<LibraryTorrent | null> {
+    try {
+      const data = await this.request('torrents/mylist', apiKey, new URLSearchParams({
+        id: String(id), bypass_cache: 'true',
+      }));
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row || typeof row !== 'object') return null;
+      const tid = Number(row.id);
+      const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
+      if (!Number.isSafeInteger(tid) || tid < 0) return null;
+      const ready = row.download_state === 'cached' ||
+        row.download_state === 'completed' ||
+        row.download_state === 'seeding' ||
+        row.download_state === 'uploading' ||
+        row.download_present === true ||
+        (row.download_finished === true && row.download_present !== false);
+      return {
+        id: tid, hash, name: String(row.name ?? ''), size: Number(row.size) || 0,
+        files: this.files(row.files),
+        ready,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   public async requestDownloadLink(
-    torrentHash: string, fileId: number, apiKey?: string, request?: MediaRequest
+    torrentHash: string, fileId: number, apiKey?: string, request?: MediaRequest, cachedFiles?: TorBoxFile[]
   ): Promise<StreamDescriptor> {
+    const normHash = torrentHash.toLowerCase();
     // Resolve the hash to the account's numeric torrent ID and real file IDs.
-    let torrent = (await this.listTorrents(apiKey)).find(t => t.hash === torrentHash.toLowerCase());
+    let torrent = (await this.listTorrents(apiKey)).find(t => t.hash === normHash);
     if (!torrent) {
       // TorBox requires torrents to belong to the user's library before it will issue a stream link.
       // Only add items already cached by TorBox, so selecting an uncached result never starts a download.
       const form = new FormData();
-      form.set('magnet', `magnet:?xt=urn:btih:${torrentHash.toLowerCase()}`);
+      form.set('magnet', `magnet:?xt=urn:btih:${normHash}`);
       form.set('add_only_if_cached', 'true');
       let createdId: number | undefined;
       try {
         const createRes = await this.request('torrents/createtorrent', apiKey, undefined, { method: 'POST', body: form });
+        console.log(`[TorBox] createtorrent response for hash=${normHash}:`, JSON.stringify(createRes));
         const idVal = createRes?.torrent_id ?? createRes?.id;
         if (idVal != null && Number.isSafeInteger(Number(idVal))) {
           createdId = Number(idVal);
@@ -142,28 +170,49 @@ export class TorBoxAdapter {
         }
         throw error;
       }
+
+      console.log(`[TorBox] Polling library for createdId=${createdId ?? 'unknown'} hash=${normHash}`);
       for (let attempt = 0; attempt < 25; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // 1. Fast path: Direct query by ID if known
+        if (createdId != null) {
+          const direct = await this.getTorrentById(createdId, apiKey);
+          if (direct) {
+            torrent = direct;
+            console.log(`[TorBox] Poll #${attempt + 1}: Found by ID=${createdId}, ready=${torrent.ready}, filesCount=${torrent.files.length}`);
+            if (torrent.ready) break;
+          }
+        }
+
+        // 2. Fallback: Query list
         const list = await this.listTorrents(apiKey);
         torrent = (createdId != null ? list.find(t => t.id === createdId) : undefined)
-          ?? list.find(t => t.hash === torrentHash.toLowerCase());
-        if (torrent?.ready && torrent.files.length > 0) break;
+          ?? list.find(t => t.hash === normHash);
+
+        if (torrent) {
+          console.log(`[TorBox] Poll #${attempt + 1}: Found in list ID=${torrent.id}, ready=${torrent.ready}, filesCount=${torrent.files.length}`);
+          if (torrent.ready) break;
+        }
       }
     }
     if (!torrent) throw new TorBoxError('TorBox did not add this cached torrent to your library.', 409);
     if (!torrent.ready) throw new TorBoxError('This torrent is still downloading.', 409);
 
+    // If TorBox has added the torrent but files list is still empty in library metadata, fallback to cached files
+    const availableFiles = torrent.files.length > 0 ? torrent.files : (cachedFiles ?? []);
+
     // 1. Match using request metadata
-    let file = request ? FileMatcher.matchFile(request, torrent.files) : null;
+    let file = request ? FileMatcher.matchFile(request, availableFiles) : null;
 
     // 2. Fall back to fileId if provided
     if (!file && fileId > 0) {
-      file = torrent.files.find(f => f.id === fileId) || null;
+      file = availableFiles.find(f => f.id === fileId) || null;
     }
 
     // 3. Fall back to picking video file directly if matching was too strict
-    if (!file && torrent.files.length > 0) {
-      const videoFiles = torrent.files.filter((f) => {
+    if (!file && availableFiles.length > 0) {
+      const videoFiles = availableFiles.filter((f) => {
         const lower = f.name.toLowerCase();
         const isVideo = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|webm)$/i.test(f.name);
         const isSample = /\b(sample|trailer|extras|bonus|featurette)\b/i.test(lower);
@@ -182,6 +231,11 @@ export class TorBoxAdapter {
           file = videoFiles.find(f => new RegExp(`(?:^|[^\\d])${epPad}(?:[^\\d]|$)`).test(f.name)) || videoFiles[0];
         }
       }
+    }
+
+    // 4. Default to first file if single fileId was passed or available
+    if (!file && fileId > 0) {
+      file = { id: fileId, name: 'video.mkv', size: torrent.size };
     }
 
     if (!file) throw new TorBoxError('The requested media file is unavailable.', 404);
