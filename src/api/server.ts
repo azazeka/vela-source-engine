@@ -3,6 +3,7 @@ import express, { Express } from 'express';
 import { PornolabProvider } from '../providers/pornolab-provider';
 import { RutorProvider } from '../providers/rutor-provider';
 import { TgxAdultProvider } from '../providers/tgx-adult-provider';
+import { TpbAdultProvider } from '../providers/tpb-adult-provider';
 import { TorBoxLibraryProvider } from '../providers/torbox-library-provider';
 import { createConfiguredTorznabProviders } from '../providers/torznab-provider';
 import { YtsProvider } from '../providers/yts-provider';
@@ -28,6 +29,7 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
     new YtsProvider(),
     new TgxAdultProvider(),
     new PornolabProvider(),
+    new TpbAdultProvider(),
   ];
   for (const provider of options.providers ?? defaultProviders) {
     sourceEngine.registerProvider(provider);
