@@ -93,7 +93,7 @@ export class SourceEngine {
 
     for (const rel of normalized) {
       const cachedTorrent = cachedTorrents.get(rel.infoHash);
-      const isCached = !!cachedTorrent;
+      const isCached = rel.provider === 'torbox-library' || !!cachedTorrent;
       const files = cachedTorrent ? cachedTorrent.files : [];
 
       let fileId = 0;
@@ -164,7 +164,7 @@ export class SourceEngine {
 
     // If the candidate was specifically requested and is not cached in TorBox,
     // fail fast with a clear message rather than waiting 25s for TorBox to reject it.
-    if (candidateId && !selected.cached) {
+    if (candidateId && !selected.cached && selected.provider !== 'torbox-library') {
       throw new TorBoxError('This torrent is not cached in TorBox yet. Add it to your TorBox library first and wait for it to finish downloading.', 409);
     }
 

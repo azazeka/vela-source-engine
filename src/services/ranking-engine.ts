@@ -12,9 +12,9 @@ export class RankingEngine {
       };
     });
 
-    // Playable versions come first; Torlock is the primary source within each
-    // readiness group. Other sources remain available as fallbacks.
+    // Playable versions come first; user's own library copies and Torlock take precedence.
     scored.sort((a, b) => Number(b.cached) - Number(a.cached)
+      || Number(b.provider === 'torbox-library') - Number(a.provider === 'torbox-library')
       || Number(b.provider === 'torznab-torlock') - Number(a.provider === 'torznab-torlock')
       || b.score - a.score);
     return scored;

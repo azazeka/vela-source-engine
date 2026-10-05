@@ -20,9 +20,9 @@ export class TorBoxLibraryProvider implements TorrentProvider {
       if (!file) return [];
       const names = [torrent.name, file.name].map(name => ` ${normalize(name)} `);
       if (!titles.some(title => names.some(name => name.includes(` ${title} `)))) return [];
-      if (request.type === 'movie') {
-        const years = torrent.name.match(/\b(?:19|20)\d{2}\b/g);
-        if (years?.length && !years.includes(String(request.year))) return [];
+      if (request.type === 'movie' && request.year) {
+        const years = torrent.name.match(/\b(?:19|20)\d{2}\b/g)?.map(Number);
+        if (years?.length && !years.some(y => Math.abs(y - request.year!) <= 1)) return [];
       }
       return [{ provider: this.id, name: file.name, infoHash: torrent.hash,
         sizeBytes: file.size, seeders: 0 }];
