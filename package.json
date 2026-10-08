@@ -10,6 +10,8 @@
     "test": "tsc && NODE_ENV=test node --test dist/tests/**/*.test.js"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.10.1",
+    "@azure/identity": "^4.13.3",
     "cors": "^2.8.5",
     "express": "^4.21.2"
   },

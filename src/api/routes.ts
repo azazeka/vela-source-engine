@@ -1,3 +1,5 @@
+import { createTasteProfileRepository } from '../services/cosmos-taste-profile-store';
+import { validateTasteProfile } from '../services/taste-profile-store';
 import { Router, Request, Response } from 'express';
 import { AIService } from '../services/ai-service';
 import { CacheManager } from '../services/cache-manager';
@@ -12,6 +14,7 @@ export function createRouter(
   aiService: AIService = new AIService()
 ): Router {
   const router = Router();
+  const tasteProfiles = createTasteProfileRepository();
 
   // Helper to extract Bearer token if passed by tvOS client
   const getApiKey = (req: Request): string | undefined => {
@@ -56,7 +59,7 @@ export function createRouter(
         },
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
     }
   });
 
@@ -98,6 +101,20 @@ export function createRouter(
     catch { res.status(401).json({ error: 'TorBox API key is required.' }); }
   });
 
+  router.get('/profile/taste', async (req, res) => {
+    if (!getApiKey(req)) { res.status(401).json({ error: 'TorBox API key is required.' }); return; }
+    try { res.json({ profile: await tasteProfiles.load(torboxAdapter.cacheScope(getApiKey(req))) }); }
+    catch { res.status(503).json({ error: 'Could not load your saved profile. Try again.' }); }
+  });
+  router.put('/profile/taste', async (req, res) => {
+    if (!getApiKey(req)) { res.status(401).json({ error: 'TorBox API key is required.' }); return; }
+    let profile;
+    try { profile = validateTasteProfile(req.body); }
+    catch { res.status(400).json({ error: 'Invalid taste profile.' }); return; }
+    try { res.json({ profile: await tasteProfiles.save(torboxAdapter.cacheScope(getApiKey(req)), profile) }); }
+    catch { res.status(503).json({ error: 'Could not save your profile. Your local copy is still available.' }); }
+  });
+
   // 3. POST /sources/prefetch (Section 04 & 14: background prefetch when user opens movie details)
   router.post('/sources/prefetch', (req: Request, res: Response) => {
     const request = req.body as MediaRequest;
@@ -131,13 +148,13 @@ export function createRouter(
       }
 
       const apiKey = getApiKey(req);
-      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
+      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey, req.body.fresh === true);
       res.json({
         mediaKey: sourceEngine.getMediaKey(request),
         candidates,
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
     }
   });
 
@@ -187,11 +204,7 @@ export function createRouter(
             }
           }
         }
-        merged.sort((a, b) => {
-          if (a.cached !== b.cached) return a.cached ? -1 : 1;
-          return b.score - a.score;
-        });
-        candidates = merged.slice(0, 100);
+        candidates = RankingEngine.rank(merged, preset).slice(0, 100);
       } else {
         candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
       }
@@ -201,7 +214,7 @@ export function createRouter(
         candidates,
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
     }
   });
 
@@ -243,8 +256,12 @@ export function createRouter(
       console.log(`[PlayResolve] Successfully resolved stream for "${result.candidate.fileName}"`);
       res.json(result);
     } catch (err: any) {
-      console.error(`[PlayResolve Error] ${err.message} (status: ${err.statusCode || 500})`);
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+      console.error('[PlayResolve failure]', JSON.stringify({
+        status: err instanceof TorBoxError ? err.statusCode : 500,
+        code: err instanceof TorBoxError ? err.code : undefined,
+        diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined,
+      }));
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
     }
   });
 
@@ -260,7 +277,7 @@ export function createRouter(
 
     res.json({
       mediaKey,
-      versions: cached,
+      versions: RankingEngine.rank(cached, (req.query.preset as QualityPreset) || 'best'),
     });
   });
 
@@ -306,7 +323,7 @@ export function createRouter(
         candidateId,
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message });
+      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
     }
   });
 

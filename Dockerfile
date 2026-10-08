@@ -28,7 +28,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    VELA_PROFILE_DIRECTORY=/app/data/profiles
 
 # Install production dependencies only
 COPY package*.json ./
@@ -36,6 +37,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy compiled artifacts from builder stage
 COPY --from=builder /app/dist ./dist
+
+# Writable profile directory; mount /app/data on persistent storage in production.
+RUN mkdir -p /app/data/profiles && chown -R node:node /app/data
 
 # Security hardening: Run as non-root unprivileged user
 USER node

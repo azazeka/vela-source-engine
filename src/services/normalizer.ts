@@ -36,17 +36,29 @@ export class Normalizer {
         parsed,
       };
 
-      // Keep primary-source attribution when the same hash is also found elsewhere.
+      // The same torrent can have a sparse title on one indexer and a full
+      // release name on another. Retain the most useful metadata and the best
+      // seeder count independently of provider response order.
       const existing = dedupeMap.get(cleanHash);
-      const isPrimary = normalized.provider === 'torznab-torlock';
-      const existingIsPrimary = existing?.provider === 'torznab-torlock';
-      if (!existing || (isPrimary && !existingIsPrimary)
-        || (isPrimary === existingIsPrimary && normalized.seeders > existing.seeders)) {
+      if (!existing) {
         dedupeMap.set(cleanHash, normalized);
+      } else {
+        const completeness = this.metadataCompleteness(normalized) - this.metadataCompleteness(existing);
+        const tie = `${normalized.name}:${normalized.provider}`.localeCompare(`${existing.name}:${existing.provider}`);
+        const preferred = completeness > 0 || (completeness === 0 && tie < 0) ? normalized : existing;
+        dedupeMap.set(cleanHash, { ...preferred, seeders: Math.max(normalized.seeders, existing.seeders) });
       }
     }
 
     return Array.from(dedupeMap.values());
+  }
+
+  private static metadataCompleteness(release: NormalizedRelease): number {
+    const p = release.parsed;
+    return Number(p.resolution !== 'unknown') + Number(p.source !== 'unknown')
+      + Number(p.releaseType !== 'unknown') + Number(p.videoCodec !== 'unknown')
+      + Number(p.hdr.some(h => h !== 'sdr')) + Number(p.audio.some(a => a !== 'unknown'))
+      + Number(p.channels !== null);
   }
 
   public static normalizeHash(hash: string | undefined): string | null {

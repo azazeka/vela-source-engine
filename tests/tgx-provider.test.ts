@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { TgxAdultProvider } from '../src/providers/tgx-adult-provider';
+import { TgxProvider } from '../src/providers/tgx-provider';
 import { MediaRequest } from '../src/types';
 
 const testHash = '513ec652eea0844f470583c18428b23e3cf43e5e';
@@ -87,3 +88,45 @@ describe('TgxAdultProvider', () => {
     assert.equal(health.id, 'tgx-adult');
   });
 });
+
+describe('TgxProvider', () => {
+  it('searches movies and parses mainstream releases correctly', async () => {
+    let requestedUrl = '';
+    const fakeFetcher: typeof fetch = async (input: RequestInfo | URL) => {
+      requestedUrl = input.toString();
+      return new Response(sampleTgxHtml, { status: 200 });
+    };
+
+    const provider = new TgxProvider('https://torrentgalaxy.to', fakeFetcher);
+    const movieReq: MediaRequest = {
+      type: 'movie',
+      tmdbId: 693134,
+      title: 'Dune Part Two',
+      originalTitle: 'Dune: Part Two',
+      year: 2024,
+    };
+
+    process.env.ENABLE_TGX_IN_TESTS = '1';
+    try {
+      const results = await provider.search(movieReq);
+      assert.equal(results.length, 2);
+      assert.equal(results[0].provider, 'tgx');
+      assert.ok(requestedUrl.includes('search=Dune%20Part%20Two%202024'));
+      assert.ok(requestedUrl.includes('c3=1'));
+    } finally {
+      delete process.env.ENABLE_TGX_IN_TESTS;
+    }
+  });
+
+  it('reports health when endpoint responds with HTML', async () => {
+    const fakeFetcher: typeof fetch = async () => {
+      return new Response('<html><body><div class="tgxtable"></div></body></html>', { status: 200 });
+    };
+
+    const provider = new TgxProvider('https://torrentgalaxy.to', fakeFetcher);
+    const health = await provider.health();
+    assert.equal(health.healthy, true);
+    assert.equal(health.id, 'tgx');
+  });
+});
+

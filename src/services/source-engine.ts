@@ -6,6 +6,7 @@ import {
   ProviderHealth,
   QualityPreset,
   RawRelease,
+  TorBoxCachedTorrent,
 } from '../types';
 import { CacheManager } from './cache-manager';
 import { FileMatcher } from './file-matcher';
@@ -38,16 +39,19 @@ export class SourceEngine {
   public async searchCandidates(
     request: MediaRequest,
     preset: QualityPreset = 'best',
-    apiKey?: string
+    apiKey?: string,
+    fresh: boolean = false
   ): Promise<PlayCandidate[]> {
     const mediaKey = this.getMediaKey(request);
     const scope = this.torbox.cacheScope(apiKey);
 
     // 1. Check cache first
     const cached = CacheManager.getCandidates(mediaKey, scope);
-    if (cached && cached.length > 0) {
+    if (!fresh && cached && cached.length > 0) {
       return RankingEngine.rank(cached, preset);
     }
+
+    if (fresh) CacheManager.setCandidates(mediaKey, [], undefined, scope);
 
     // Provider fan-out with bounded searches; account pagination may take longer than a single request.
     const rawReleases: RawRelease[] = [];
@@ -84,17 +88,29 @@ export class SourceEngine {
       return [];
     }
 
-    // 5. Batch TorBox cache check
-    const hashes = normalized.map((n) => n.infoHash);
-    const cachedTorrents = await this.torbox.checkCached(hashes, apiKey);
+    // Ready account files do not depend on the global cache-check endpoint.
+    // Preserve them even when another provider wins hash deduplication.
+    const libraryFiles = new Map(rawReleases
+      .filter(rel => rel.provider === 'torbox-library' && rel.libraryFiles?.length)
+      .map(rel => [Normalizer.normalizeHash(rel.infoHash), rel.libraryFiles!] as const));
+    const hashes = normalized.map(n => n.infoHash).filter(hash => !libraryFiles.has(hash));
+    let cachedTorrents = new Map<string, TorBoxCachedTorrent>();
+    if (hashes.length > 0) {
+      try {
+        cachedTorrents = await this.torbox.checkCached(hashes, apiKey);
+      } catch (error) {
+        if (libraryFiles.size === 0 || (error instanceof TorBoxError && error.statusCode === 401)) throw error;
+        console.warn('TorBox cache check failed; using ready library files.');
+      }
+    }
 
     // 6. File matching & candidate construction
     const candidates: PlayCandidate[] = [];
 
     for (const rel of normalized) {
       const cachedTorrent = cachedTorrents.get(rel.infoHash);
-      const isCached = rel.provider === 'torbox-library' || !!cachedTorrent;
-      const files = cachedTorrent ? cachedTorrent.files : [];
+      const isCached = libraryFiles.has(rel.infoHash) || rel.provider === 'torbox-library' || !!cachedTorrent;
+      const files = libraryFiles.get(rel.infoHash) ?? cachedTorrent?.files ?? [];
 
       let fileId = 0;
       let fileName = rel.name;
@@ -130,6 +146,7 @@ export class SourceEngine {
         provider: rel.provider,
         rawReleaseName: rel.name,
         score: 0,
+        seeders: rel.seeders,
         badges: [],
       });
     }
@@ -162,17 +179,17 @@ export class SourceEngine {
 
     if (!selected) throw new TorBoxError('The selected version is unavailable.', 404);
 
-    // If the candidate was specifically requested and is not cached in TorBox,
-    // fail fast with a clear message rather than waiting 25s for TorBox to reject it.
-    if (candidateId && !selected.cached && selected.provider !== 'torbox-library') {
-      throw new TorBoxError('This torrent is not cached in TorBox yet. Add it to your TorBox library first and wait for it to finish downloading.', 409);
+    if (!selected.cached) {
+      throw new TorBoxError('This torrent is not cached in TorBox yet. Choose a version to download to your TorBox library.', 409, 'TORBOX_NOT_CACHED');
     }
 
     const stream = await this.torbox.requestDownloadLink(
       selected.torrentHash,
       selected.fileId,
       apiKey,
-      request
+      request,
+      undefined,
+      false
     );
 
     return {

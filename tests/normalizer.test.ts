@@ -4,13 +4,17 @@ import { Normalizer } from '../src/services/normalizer';
 import { RawRelease } from '../src/types';
 
 describe('Normalizer', () => {
-  it('retains Torlock attribution for duplicate hashes regardless of response order', () => {
-    const primary: RawRelease = { provider: 'torznab-torlock', name: 'Movie.2024.1080p.WEB-DL',
-      infoHash: 'a'.repeat(40), sizeBytes: 4e9, seeders: 5 };
-    const fallback = { ...primary, provider: 'rutor', seeders: 120 };
-    for (const releases of [[primary, fallback], [fallback, primary]]) {
-      assert.strictEqual(Normalizer.normalize(releases)[0].provider, 'torznab-torlock');
-    }
+  it('keeps complete metadata and maximum seeders regardless of provider response order', () => {
+    const sparse: RawRelease = { provider: 'torznab-torlock', name: 'Movie.2024',
+      infoHash: 'a'.repeat(40), sizeBytes: 4e9, seeders: 120 };
+    const detailed = { ...sparse, provider: 'rutor', seeders: 5,
+      name: 'Movie.2024.2160p.WEB-DL.HEVC.DDP5.1.Atmos.DV' };
+    const first = Normalizer.normalize([sparse, detailed]);
+    assert.deepStrictEqual(first, Normalizer.normalize([detailed, sparse]));
+    assert.strictEqual(first.length, 1);
+    assert.strictEqual(first[0].provider, 'rutor');
+    assert.strictEqual(first[0].parsed.resolution, '2160p');
+    assert.strictEqual(first[0].seeders, 120);
   });
 
   it('deduplicates identical infoHash keeping highest seeders', () => {

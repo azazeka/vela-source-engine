@@ -34,13 +34,16 @@ export class FileMatcher {
   }
 
   private static matchEpisode(request: MediaRequest, videoFiles: TorBoxFile[]): TorBoxFile | null {
-    // If there is only one primary video file in the torrent, it is a single-episode release
-    if (videoFiles.length === 1) {
-      return videoFiles[0];
-    }
-
     const season = request.season ?? 1;
     const episode = request.episode ?? 1;
+    // An explicit different episode must never be accepted by a loose number match.
+    videoFiles = videoFiles.filter(file => {
+      if (file.s_num != null && Number(file.s_num) !== season) return false;
+      if (file.e_num != null && Number(file.e_num) !== episode) return false;
+      const marker = file.name.match(/\bS(\d+)E(\d+)\b/i) ?? file.name.match(/\b(\d+)x(\d+)\b/i);
+      return !marker || (Number(marker[1]) === season && Number(marker[2]) === episode);
+    });
+    if (videoFiles.length === 1) return videoFiles[0];
 
     const sPad = String(season).padStart(2, '0');
     const ePad = String(episode).padStart(2, '0');

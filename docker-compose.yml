@@ -15,9 +15,15 @@ services:
       - NODE_ENV=production
       - TORBOX_API_KEY=${TORBOX_API_KEY:-}
       - CORS_ORIGIN=*
+      - VELA_PROFILE_DIRECTORY=/app/data/profiles
+    volumes:
+      - vela-profile-data:/app/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 5s
+
+volumes:
+  vela-profile-data:

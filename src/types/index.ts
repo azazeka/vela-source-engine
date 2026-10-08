@@ -22,6 +22,7 @@ export interface RawRelease {
   sizeBytes: number;
   seeders: number;
   detailsUrl?: string | null;
+  libraryFiles?: TorBoxFile[];
 }
 
 export type Resolution = '2160p' | '1080p' | '720p' | '480p' | 'unknown';
@@ -92,10 +93,11 @@ export interface PlayCandidate {
   provider: string;
   rawReleaseName: string;
   score: number;
+  seeders?: number;
   badges: string[];
 }
 
-export type QualityPreset = 'best' | 'balanced' | 'data_saver';
+export type QualityPreset = 'best' | 'balanced';
 
 export interface ProviderHealth {
   id: string;
