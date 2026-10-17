@@ -164,3 +164,47 @@ test('Gemini findByDescription calls Gemini with specialized plot identifier pro
   }
 });
 
+test('AIService filters out anime suggestions unless explicitly requested', async () => {
+  const service = new AIService();
+
+  // Cyberpunk prompt should return Dark City, Matrix, Blade Runner 2049, Upgrade — not Ghost in the Shell
+  const cyberpunk = await service.discover('киберпанк и технологии будущего');
+  assert.ok(cyberpunk.suggestions.length > 0);
+  assert.ok(!cyberpunk.suggestions.some(s => s.title.toLowerCase().includes('ghost in the shell')));
+  assert.ok(cyberpunk.suggestions.some(s => s.title === 'Dark City' || s.title === 'Blade Runner 2049'));
+
+  // Dream prompt should not return Paprika
+  const dreams = await service.findByDescription('фильм про сны и погружение в подсознание');
+  assert.ok(dreams.suggestions.length > 0);
+  assert.ok(!dreams.suggestions.some(s => s.title.toLowerCase().includes('paprika')));
+  assert.ok(dreams.suggestions.some(s => s.title === 'Inception' || s.title === 'Vanilla Sky'));
+
+  // Gemini discovery response with anime should be filtered out
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return Response.json({
+      candidates: [{
+        content: {
+          parts: [{
+            text: JSON.stringify({
+              suggestions: [
+                { title: 'Attack on Titan', year: 2013, reason: 'Anime about giants.', searchKeyword: 'Attack on Titan' },
+                { title: 'Interstellar', year: 2014, reason: 'Epic space journey.', searchKeyword: 'Interstellar' }
+              ]
+            })
+          }]
+        }
+      }]
+    });
+  }) as typeof fetch;
+
+  try {
+    const geminiRes = await new AIService('fake-key').discover('space movie');
+    assert.equal(geminiRes.suggestions.length, 1);
+    assert.equal(geminiRes.suggestions[0].title, 'Interstellar');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
