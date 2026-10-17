@@ -10,7 +10,9 @@ export interface TrailerStreamInfo {
 
 export class TrailerResolver {
   private visionYt: Innertube | null = null;
-  private androidYt: Innertube | null = null;
+  private androidVRClient: Innertube | null = null;
+  private androidClient: Innertube | null = null;
+  private iosClient: Innertube | null = null;
   private cache = new Map<string, TrailerStreamInfo>();
   private readonly CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
@@ -24,14 +26,34 @@ export class TrailerResolver {
     return this.visionYt;
   }
 
-  private async getAndroidClient(): Promise<Innertube> {
-    if (!this.androidYt) {
-      this.androidYt = await Innertube.create({
+  private async getAndroidVRClient(): Promise<Innertube> {
+    if (!this.androidVRClient) {
+      this.androidVRClient = await Innertube.create({
         client_type: ClientType.ANDROID_VR,
         retrieve_player: false,
       });
     }
-    return this.androidYt;
+    return this.androidVRClient;
+  }
+
+  private async getAndroidClient(): Promise<Innertube> {
+    if (!this.androidClient) {
+      this.androidClient = await Innertube.create({
+        client_type: ClientType.ANDROID,
+        retrieve_player: false,
+      });
+    }
+    return this.androidClient;
+  }
+
+  private async getIOSClient(): Promise<Innertube> {
+    if (!this.iosClient) {
+      this.iosClient = await Innertube.create({
+        client_type: ClientType.IOS,
+        retrieve_player: false,
+      });
+    }
+    return this.iosClient;
   }
 
   public async resolve(videoId: string): Promise<TrailerStreamInfo> {
@@ -109,11 +131,45 @@ export class TrailerResolver {
         this.cache.set(cleanId, result);
         return result;
       } else {
-        diagnostics.push(`Android_VR: status=${info.playability_status?.status}, reason=${info.playability_status?.reason || 'no_formats'}`);
+        diagnostics.push(`Android: status=${info.playability_status?.status}, reason=${info.playability_status?.reason || 'no_formats'}`);
       }
     } catch (err: any) {
-      diagnostics.push(`Android_VR error: ${err?.message ?? err}`);
-      console.warn(`[TrailerResolver] Android VR client failed for ${cleanId}: ${err?.message ?? err}`);
+      diagnostics.push(`Android error: ${err?.message ?? err}`);
+      console.warn(`[TrailerResolver] Android client failed for ${cleanId}: ${err?.message ?? err}`);
+    }
+
+    // 3. Fallback to iOS client
+    try {
+      const yt = await this.getIOSClient();
+      const info = await yt.getBasicInfo(cleanId);
+      const adaptive = info.streaming_data?.adaptive_formats || [];
+      const formats = info.streaming_data?.formats || [];
+
+      const videoCandidates = adaptive
+        .filter((f) => f.has_video && f.mime_type.includes('mp4') && f.url)
+        .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+      const muxedCandidates = formats
+        .filter((f) => f.has_video && f.url)
+        .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+      const bestStream = muxedCandidates[0] || videoCandidates[0];
+      if (bestStream && bestStream.url) {
+        const result: TrailerStreamInfo = {
+          streamUrl: bestStream.url,
+          format: 'mp4',
+          quality: bestStream.quality_label || `${bestStream.height ?? 1080}p`,
+          title: info.basic_info.title,
+          expiresAt: Date.now() + this.CACHE_TTL_MS,
+        };
+        this.cache.set(cleanId, result);
+        return result;
+      } else {
+        diagnostics.push(`iOS: status=${info.playability_status?.status}, reason=${info.playability_status?.reason || 'no_formats'}`);
+      }
+    } catch (err: any) {
+      diagnostics.push(`iOS error: ${err?.message ?? err}`);
+      console.warn(`[TrailerResolver] iOS client failed for ${cleanId}: ${err?.message ?? err}`);
     }
 
     throw new Error(`Unable to resolve playable stream for trailer: ${cleanId}. (${diagnostics.join('; ')})`);
