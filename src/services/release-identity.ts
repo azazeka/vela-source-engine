@@ -13,9 +13,27 @@ export class ReleaseIdentity {
     const group = /-([a-z0-9]+)(?:\.(?:mkv|mp4|avi|m4v))?$/i.exec(name)?.[1].toLowerCase();
     return group && !['dl', 'rip', 'ray', 'web'].includes(group) ? group : undefined;
   }
+
+  private static normalizeCache = new Map<string, string>();
+  private static readonly MAX_NORMALIZE_CACHE = 5000;
+
+  static clearCache(): void {
+    this.normalizeCache.clear();
+  }
+
   static normalize(value: string): string {
-    return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    const cached = ReleaseIdentity.normalizeCache.get(value);
+    if (cached !== undefined) return cached;
+
+    const normalized = value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
       .replace(/&/g, ' and ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+    if (ReleaseIdentity.normalizeCache.size >= ReleaseIdentity.MAX_NORMALIZE_CACHE) {
+      const firstKey = ReleaseIdentity.normalizeCache.keys().next().value;
+      if (firstKey) ReleaseIdentity.normalizeCache.delete(firstKey);
+    }
+    ReleaseIdentity.normalizeCache.set(value, normalized);
+    return normalized;
   }
 
   static matches(name: string, request: MediaRequest): boolean {

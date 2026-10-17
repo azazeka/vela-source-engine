@@ -9,14 +9,24 @@ import {
 } from '../types';
 
 export class ReleaseParser {
+  private static parseCache = new Map<string, ParsedReleaseInfo>();
+  private static readonly MAX_CACHE_SIZE = 5000;
+
+  public static clearCache(): void {
+    this.parseCache.clear();
+  }
+
   public static parse(rawTitle: string): ParsedReleaseInfo {
+    const cached = this.parseCache.get(rawTitle);
+    if (cached) return cached;
+
     const clean = rawTitle.replace(/[\._\(\)\[\]\-]/g, ' ').trim();
     const lower = clean.toLowerCase();
 
     // 1. Detect Trash (samples, trailers, extras, OSTs)
     const trashCheck = this.checkTrash(lower);
     if (trashCheck.isTrash) {
-      return {
+      const trashResult: ParsedReleaseInfo = {
         rawTitle,
         resolution: 'unknown',
         source: 'unknown',
@@ -33,6 +43,12 @@ export class ReleaseParser {
         isTrash: true,
         trashReason: trashCheck.reason,
       };
+      if (this.parseCache.size >= this.MAX_CACHE_SIZE) {
+        const firstKey = this.parseCache.keys().next().value;
+        if (firstKey) this.parseCache.delete(firstKey);
+      }
+      this.parseCache.set(rawTitle, trashResult);
+      return trashResult;
     }
 
     // 2. Resolution
@@ -60,7 +76,7 @@ export class ReleaseParser {
     // 9. Season / Episode
     const { season, episode, isSeasonPack } = this.parseSeasonEpisode(clean);
 
-    return {
+    const result: ParsedReleaseInfo = {
       rawTitle,
       resolution,
       source,
@@ -76,6 +92,13 @@ export class ReleaseParser {
       isSeasonPack,
       isTrash: false,
     };
+
+    if (this.parseCache.size >= this.MAX_CACHE_SIZE) {
+      const firstKey = this.parseCache.keys().next().value;
+      if (firstKey) this.parseCache.delete(firstKey);
+    }
+    this.parseCache.set(rawTitle, result);
+    return result;
   }
 
   private static checkTrash(lower: string): { isTrash: boolean; reason?: string } {

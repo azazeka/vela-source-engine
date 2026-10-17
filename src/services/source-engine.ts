@@ -12,36 +12,52 @@ import { CacheManager } from './cache-manager';
 import { FileMatcher } from './file-matcher';
 import { Normalizer } from './normalizer';
 import { RankingEngine } from './ranking-engine';
+import { DebridAdapter, DebridError } from './debrid-adapter.interface';
+import { RealDebridAdapter } from './realdebrid-adapter';
 import { ReleaseIdentity } from './release-identity';
 import { TorBoxAdapter, TorBoxError } from './torbox-adapter';
 
 export class SourceEngine {
   private providers: TorrentProvider[] = [];
   private torbox: TorBoxAdapter;
+  private realdebrid?: RealDebridAdapter;
 
-  constructor(torboxAdapter: TorBoxAdapter = new TorBoxAdapter()) {
+  constructor(
+    torboxAdapter: TorBoxAdapter = new TorBoxAdapter(),
+    realdebridAdapter?: RealDebridAdapter
+  ) {
     this.torbox = torboxAdapter;
+    this.realdebrid = realdebridAdapter;
+  }
+
+  public getAdapter(debridProvider?: string): DebridAdapter {
+    if (debridProvider === 'realdebrid' && this.realdebrid) {
+      return this.realdebrid;
+    }
+    return this.torbox;
   }
 
   public registerProvider(provider: TorrentProvider): void {
     this.providers.push(provider);
   }
 
-  public getMediaKey(request: MediaRequest): string {
-    if (request.type === 'movie') {
-      return `movie:${request.tmdbId}`;
-    }
-    return `episode:${request.tmdbId}:${request.season ?? 1}:${request.episode ?? 1}`;
+  public getMediaKey(request: MediaRequest, debridProvider: string = 'torbox'): string {
+    const base = request.type === 'movie'
+      ? `movie:${request.tmdbId}`
+      : `episode:${request.tmdbId}:${request.season ?? 1}:${request.episode ?? 1}`;
+    return debridProvider === 'realdebrid' ? `${base}:rd` : base;
   }
 
   public async searchCandidates(
     request: MediaRequest,
     preset: QualityPreset = 'best',
     apiKey?: string,
-    fresh: boolean = false
+    fresh: boolean = false,
+    debridProvider?: string
   ): Promise<PlayCandidate[]> {
-    const mediaKey = this.getMediaKey(request);
-    const scope = this.torbox.cacheScope(apiKey);
+    const adapter = this.getAdapter(debridProvider);
+    const mediaKey = this.getMediaKey(request, adapter.id);
+    const scope = adapter.cacheScope(apiKey);
 
     // 1. Check cache first
     const cached = CacheManager.getCandidates(mediaKey, scope);
@@ -60,7 +76,7 @@ export class SourceEngine {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const timeoutPromise = new Promise<RawRelease[]>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Provider search timeout')), 10000);
+          timer = setTimeout(() => reject(new Error('Provider search timeout')), 4000);
         });
         const results = await Promise.race([provider.search(request, apiKey), timeoutPromise]);
         rawReleases.push(...results);
@@ -90,11 +106,34 @@ export class SourceEngine {
     const hashes = normalized.map(n => n.infoHash).filter(hash => !libraryFiles.has(hash));
     let cachedTorrents = new Map<string, TorBoxCachedTorrent>();
     if (hashes.length > 0) {
-      try {
-        cachedTorrents = await this.torbox.checkCached(hashes, apiKey);
-      } catch (error) {
-        if (libraryFiles.size === 0 || (error instanceof TorBoxError && error.statusCode === 401)) throw error;
-        console.warn('TorBox cache check failed; using ready library files.');
+      const missingHashes: string[] = [];
+      for (const hash of hashes) {
+        const cached = CacheManager.getDebridCached(adapter.id, hash, scope);
+        if (cached.hit) {
+          if (cached.torrent) {
+            cachedTorrents.set(hash, cached.torrent);
+          }
+        } else {
+          missingHashes.push(hash);
+        }
+      }
+
+      if (missingHashes.length > 0) {
+        try {
+          const freshMap = await adapter.checkCached(missingHashes, apiKey);
+          for (const hash of missingHashes) {
+            const hit = freshMap.get(hash);
+            if (hit) {
+              cachedTorrents.set(hash, hit);
+              CacheManager.setDebridCached(adapter.id, hash, hit, 15 * 60 * 1000, scope);
+            } else {
+              CacheManager.setDebridCached(adapter.id, hash, null, 5 * 60 * 1000, scope);
+            }
+          }
+        } catch (error) {
+          if (libraryFiles.size === 0 || (error instanceof DebridError && error.statusCode === 401)) throw error;
+          console.warn(`${adapter.id} cache check failed; using ready library files.`);
+        }
       }
     }
 
@@ -167,9 +206,11 @@ export class SourceEngine {
     request: MediaRequest,
     candidateId?: string,
     preset: QualityPreset = 'best',
-    apiKey?: string
+    apiKey?: string,
+    debridProvider?: string
   ): Promise<PlayResolveResponse> {
-    const candidates = await this.searchCandidates(request, preset, apiKey);
+    const adapter = this.getAdapter(debridProvider);
+    const candidates = await this.searchCandidates(request, preset, apiKey, false, debridProvider);
     if (candidates.length === 0) {
       throw new TorBoxError('No playable candidates found for this media.', 404);
     }
@@ -177,7 +218,12 @@ export class SourceEngine {
     const eligible = candidateId ? candidates.filter(c => c.candidateId === candidateId) : candidates.filter(c => c.cached);
     if (candidateId && !eligible.length) throw new TorBoxError('The selected version is unavailable.', 404);
     if (!eligible.length || (candidateId && !eligible[0].cached)) {
-      throw new TorBoxError('This torrent is not cached in TorBox yet. Choose a version to download to your TorBox library.', 409, 'TORBOX_NOT_CACHED');
+      const isRD = adapter.id === 'realdebrid';
+      const msg = isRD
+        ? 'This torrent is not cached in Real-Debrid yet. Choose a version to download to your Real-Debrid library.'
+        : 'This torrent is not cached in TorBox yet. Choose a version to download to your TorBox library.';
+      const code = isRD ? 'REALDEBRID_NOT_CACHED' : 'TORBOX_NOT_CACHED';
+      throw new TorBoxError(msg, 409, code);
     }
     if (!candidateId) {
       const hash = request.preferredTorrentHash?.toLowerCase();
@@ -190,12 +236,12 @@ export class SourceEngine {
       try {
         const selectedFile = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|webm)$/i.test(selected.fileName)
           ? { name: selected.fileName, size: selected.sizeBytes } : undefined;
-        const stream = await this.torbox.requestDownloadLink(selected.torrentHash, selected.fileId, apiKey, request, undefined, false, selectedFile);
+        const stream = await adapter.requestDownloadLink(selected.torrentHash, selected.fileId, apiKey, request, undefined, false, selectedFile);
         return { candidate: selected, stream };
       } catch (error) {
         // Retry only another verified copy. Authorization, rate limits and account errors must surface.
-        if (candidateId || !(error instanceof TorBoxError) || error.statusCode !== 404) throw error;
-        CacheManager.markCandidateFailure(selected.candidateId, undefined, this.torbox.cacheScope(apiKey));
+        if (candidateId || !(error instanceof DebridError) || error.statusCode !== 404) throw error;
+        CacheManager.markCandidateFailure(selected.candidateId, undefined, adapter.cacheScope(apiKey));
       }
     }
     throw new TorBoxError('No verified playable copy of this episode is available. Choose another version.', 404);

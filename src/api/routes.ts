@@ -5,6 +5,8 @@ import { AIService } from '../services/ai-service';
 import { CacheManager } from '../services/cache-manager';
 import { RankingEngine } from '../services/ranking-engine';
 import { SourceEngine } from '../services/source-engine';
+import { DebridAdapter, DebridError } from '../services/debrid-adapter.interface';
+import { RealDebridAdapter } from '../services/realdebrid-adapter';
 import { TorBoxAdapter, TorBoxError } from '../services/torbox-adapter';
 import { TrailerResolver } from '../services/trailer-resolver';
 import { CandidateSummary, MediaRequest, PlayCandidate, QualityPreset } from '../types';
@@ -13,10 +15,23 @@ export function createRouter(
   sourceEngine: SourceEngine,
   torboxAdapter: TorBoxAdapter,
   aiService: AIService = new AIService(),
-  trailerResolver: TrailerResolver = new TrailerResolver()
+  trailerResolver: TrailerResolver = new TrailerResolver(),
+  realdebridAdapter: RealDebridAdapter = new RealDebridAdapter()
 ): Router {
   const router = Router();
   const tasteProfiles = createTasteProfileRepository();
+
+  const getDebridProvider = (req: Request): 'torbox' | 'realdebrid' => {
+    const provider = req.headers['x-debrid-provider'];
+    if (typeof provider === 'string' && provider.toLowerCase() === 'realdebrid') {
+      return 'realdebrid';
+    }
+    return 'torbox';
+  };
+
+  const getDebridAdapter = (req: Request): DebridAdapter => {
+    return getDebridProvider(req) === 'realdebrid' ? realdebridAdapter : torboxAdapter;
+  };
 
   // Helper to extract Bearer token if passed by tvOS client
   const getApiKey = (req: Request): string | undefined => {
@@ -47,23 +62,26 @@ export function createRouter(
   router.post('/session/start', async (req: Request, res: Response) => {
     try {
       const apiKey = getApiKey(req);
-      const torboxHealth = await torboxAdapter.health(apiKey);
+      const adapter = getDebridAdapter(req);
+      const debridHealth = await adapter.health(apiKey);
       const providersHealth = await sourceEngine.checkProvidersHealth(apiKey);
 
       const overallStatus =
-        torboxHealth !== 'ok' || providersHealth.healthy === 0 ? 'degraded' : 'ready';
+        debridHealth !== 'ok' || providersHealth.healthy === 0 ? 'degraded' : 'ready';
 
       res.json({
         status: overallStatus,
         sourceEngine: true,
-        torbox: torboxHealth,
+        debridProvider: adapter.id,
+        debrid: debridHealth,
+        torbox: debridHealth, // for backward compatibility with existing clients
         providers: {
           healthy: providersHealth.healthy,
           degraded: providersHealth.degraded,
         },
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
+      res.status(err instanceof DebridError ? err.statusCode : 500).json({ error: err.message, code: err instanceof DebridError ? err.code : undefined, diagnostic: err instanceof DebridError ? err.diagnostic : undefined });
     }
   });
 
@@ -148,21 +166,21 @@ export function createRouter(
 
   // Require an account for source caches and playback; health & AI stay public.
   router.use((req, res, next) => {
-    try { torboxAdapter.cacheScope(getApiKey(req)); next(); }
-    catch { res.status(401).json({ error: 'TorBox API key is required.' }); }
+    try { getDebridAdapter(req).cacheScope(getApiKey(req)); next(); }
+    catch { res.status(401).json({ error: `${getDebridProvider(req) === 'realdebrid' ? 'Real-Debrid' : 'TorBox'} API key is required.` }); }
   });
 
   router.get('/profile/taste', async (req, res) => {
-    if (!getApiKey(req)) { res.status(401).json({ error: 'TorBox API key is required.' }); return; }
-    try { res.json({ profile: await tasteProfiles.load(torboxAdapter.cacheScope(getApiKey(req))) }); }
+    if (!getApiKey(req)) { res.status(401).json({ error: 'API key is required.' }); return; }
+    try { res.json({ profile: await tasteProfiles.load(getDebridAdapter(req).cacheScope(getApiKey(req))) }); }
     catch { res.status(503).json({ error: 'Could not load your saved profile. Try again.' }); }
   });
   router.put('/profile/taste', async (req, res) => {
-    if (!getApiKey(req)) { res.status(401).json({ error: 'TorBox API key is required.' }); return; }
+    if (!getApiKey(req)) { res.status(401).json({ error: 'API key is required.' }); return; }
     let profile;
     try { profile = validateTasteProfile(req.body); }
     catch { res.status(400).json({ error: 'Invalid taste profile.' }); return; }
-    try { res.json({ profile: await tasteProfiles.save(torboxAdapter.cacheScope(getApiKey(req)), profile) }); }
+    try { res.json({ profile: await tasteProfiles.save(getDebridAdapter(req).cacheScope(getApiKey(req)), profile) }); }
     catch { res.status(503).json({ error: 'Could not save your profile. Your local copy is still available.' }); }
   });
 
@@ -174,11 +192,12 @@ export function createRouter(
       return;
     }
 
-    const mediaKey = sourceEngine.getMediaKey(request);
+    const provider = getDebridProvider(req);
+    const mediaKey = sourceEngine.getMediaKey(request, provider);
     const apiKey = getApiKey(req);
 
     // Fire and forget / background resolve
-    sourceEngine.searchCandidates(request, 'best', apiKey).catch((err) => {
+    sourceEngine.searchCandidates(request, 'best', apiKey, false, provider).catch((err) => {
       console.warn(`Prefetch failed for ${mediaKey}.`);
     });
 
@@ -199,13 +218,14 @@ export function createRouter(
       }
 
       const apiKey = getApiKey(req);
-      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey, req.body.fresh === true);
+      const provider = getDebridProvider(req);
+      const candidates = await sourceEngine.searchCandidates(request, preset, apiKey, req.body.fresh === true, provider);
       res.json({
-        mediaKey: sourceEngine.getMediaKey(request),
+        mediaKey: sourceEngine.getMediaKey(request, provider),
         candidates,
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
+      res.status(err instanceof DebridError ? err.statusCode : 500).json({ error: err.message, code: err instanceof DebridError ? err.code : undefined, diagnostic: err instanceof DebridError ? err.diagnostic : undefined });
     }
   });
 
@@ -219,7 +239,8 @@ export function createRouter(
       return;
     }
 
-    const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
+    const adapter = getDebridAdapter(req);
+    const cached = CacheManager.getCandidates(mediaKey, adapter.cacheScope(getApiKey(req)));
     if (!cached) {
       res.status(404).json({ error: 'No cached candidates found for this mediaKey' });
       return;
@@ -242,24 +263,26 @@ export function createRouter(
       }
 
       const apiKey = getApiKey(req);
-      console.log(`[PlayResolve] Starting resolve for tmdbId=${request.tmdbId} title="${request.title}" candidateId=${candidateId ?? 'auto'}`);
-      const result = await sourceEngine.resolvePlay(request, candidateId, preset, apiKey);
+      const provider = getDebridProvider(req);
+      console.log(`[PlayResolve] Starting resolve for tmdbId=${request.tmdbId} title="${request.title}" candidateId=${candidateId ?? 'auto'} provider=${provider}`);
+      const result = await sourceEngine.resolvePlay(request, candidateId, preset, apiKey, provider);
       console.log(`[PlayResolve] Successfully resolved stream for "${result.candidate.fileName}"`);
       res.json(result);
     } catch (err: any) {
       console.error('[PlayResolve failure]', JSON.stringify({
-        status: err instanceof TorBoxError ? err.statusCode : 500,
-        code: err instanceof TorBoxError ? err.code : undefined,
-        diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined,
+        status: err instanceof DebridError ? err.statusCode : 500,
+        code: err instanceof DebridError ? err.code : undefined,
+        diagnostic: err instanceof DebridError ? err.diagnostic : undefined,
       }));
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
+      res.status(err instanceof DebridError ? err.statusCode : 500).json({ error: err.message, code: err instanceof DebridError ? err.code : undefined, diagnostic: err instanceof DebridError ? err.diagnostic : undefined });
     }
   });
 
   // 7. GET /versions/:mediaKey (Section 10: Manual versions list)
   router.get('/versions/:mediaKey', (req: Request, res: Response) => {
     const mediaKey = req.params.mediaKey;
-    const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
+    const adapter = getDebridAdapter(req);
+    const cached = CacheManager.getCandidates(mediaKey, adapter.cacheScope(getApiKey(req)));
 
     if (!cached) {
       res.status(404).json({ error: 'No versions found or expired for this mediaKey' });
@@ -281,16 +304,18 @@ export function createRouter(
         return;
       }
 
-      if (!request || sourceEngine.getMediaKey(request) !== mediaKey) {
+      const provider = getDebridProvider(req);
+      if (!request || sourceEngine.getMediaKey(request, provider) !== mediaKey) {
         res.status(400).json({ error: 'Playback media key does not match request.' });
         return;
       }
 
+      const adapter = getDebridAdapter(req);
       // Mark candidate as bad
-      CacheManager.markCandidateFailure(candidateId, undefined, torboxAdapter.cacheScope(getApiKey(req)));
+      CacheManager.markCandidateFailure(candidateId, undefined, adapter.cacheScope(getApiKey(req)));
 
       // Check if we can fallback to the next candidate
-      const cached = CacheManager.getCandidates(mediaKey, torboxAdapter.cacheScope(getApiKey(req)));
+      const cached = CacheManager.getCandidates(mediaKey, adapter.cacheScope(getApiKey(req)));
       if (cached && cached.length > 0) {
         const nextCandidate = cached[0];
         const apiKey = getApiKey(req);
@@ -299,7 +324,8 @@ export function createRouter(
             request,
             nextCandidate.candidateId,
             'best',
-            apiKey
+            apiKey,
+            provider
           );
           res.json({
             status: 'fallback_ready',
@@ -314,7 +340,7 @@ export function createRouter(
         candidateId,
       });
     } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
+      res.status(err instanceof DebridError ? err.statusCode : 500).json({ error: err.message, code: err instanceof DebridError ? err.code : undefined, diagnostic: err instanceof DebridError ? err.diagnostic : undefined });
     }
   });
 

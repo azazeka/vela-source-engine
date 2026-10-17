@@ -37,7 +37,7 @@ export class TpbProvider implements TorrentProvider {
       try {
         const url = `${base}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(2500),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
             'Accept': 'application/json',

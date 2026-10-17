@@ -82,7 +82,7 @@ export class TorznabProvider implements TorrentProvider {
 
   private async get(url: URL): Promise<Response> {
     try {
-      return await this.fetcher(url, { signal: AbortSignal.timeout(8000) });
+      return await this.fetcher(url, { signal: AbortSignal.timeout(3000) });
     } catch {
       // Fetch errors may include the URL, which can contain the indexer's API key.
       throw new Error('Torznab indexer is temporarily unavailable.');

@@ -12,18 +12,33 @@ import { YtsProvider } from '../providers/yts-provider';
 import { TorrentProvider } from '../providers/provider.interface';
 import { AIService } from '../services/ai-service';
 import { SourceEngine } from '../services/source-engine';
+import { RealDebridAdapter } from '../services/realdebrid-adapter';
 import { TorBoxAdapter } from '../services/torbox-adapter';
 import { TrailerResolver } from '../services/trailer-resolver';
 import { createRouter } from './routes';
 
-export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: TorrentProvider[]; aiService?: AIService; trailerResolver?: TrailerResolver } = {}): { app: Express; sourceEngine: SourceEngine; torboxAdapter: TorBoxAdapter; aiService: AIService; trailerResolver: TrailerResolver } {
+export function createApp(options: {
+  torboxAdapter?: TorBoxAdapter;
+  realdebridAdapter?: RealDebridAdapter;
+  providers?: TorrentProvider[];
+  aiService?: AIService;
+  trailerResolver?: TrailerResolver;
+} = {}): {
+  app: Express;
+  sourceEngine: SourceEngine;
+  torboxAdapter: TorBoxAdapter;
+  realdebridAdapter: RealDebridAdapter;
+  aiService: AIService;
+  trailerResolver: TrailerResolver;
+} {
   const app = express();
 
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
   const torboxAdapter = options.torboxAdapter ?? new TorBoxAdapter();
-  const sourceEngine = new SourceEngine(torboxAdapter);
+  const realdebridAdapter = options.realdebridAdapter ?? new RealDebridAdapter();
+  const sourceEngine = new SourceEngine(torboxAdapter, realdebridAdapter);
   const aiService = options.aiService ?? new AIService();
   const trailerResolver = options.trailerResolver ?? new TrailerResolver();
 
@@ -43,9 +58,9 @@ export function createApp(options: { torboxAdapter?: TorBoxAdapter; providers?: 
     sourceEngine.registerProvider(provider);
   }
 
-  const router = createRouter(sourceEngine, torboxAdapter, aiService, trailerResolver);
+  const router = createRouter(sourceEngine, torboxAdapter, aiService, trailerResolver, realdebridAdapter);
   app.use('/api', router);
   app.use('/', router); // Also serve directly at root for convenience
 
-  return { app, sourceEngine, torboxAdapter, aiService, trailerResolver };
+  return { app, sourceEngine, torboxAdapter, realdebridAdapter, aiService, trailerResolver };
 }

@@ -23,12 +23,15 @@ export function retryAfterSeconds(value: string | null, now = Date.now()): numbe
   return Number.isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? seconds : undefined;
 }
 
-export class TorBoxError extends Error {
-  constructor(message: string, public readonly statusCode: number = 502, public readonly code?: string,
-    public readonly diagnostic?: TorBoxDiagnostic) { super(message); }
+import { DebridAdapter, DebridError } from './debrid-adapter.interface';
+
+export class TorBoxError extends DebridError {
+  constructor(message: string, statusCode: number = 502, code?: string,
+    diagnostic?: TorBoxDiagnostic) { super(message, statusCode, code, diagnostic); }
 }
 
-export class TorBoxAdapter {
+export class TorBoxAdapter implements DebridAdapter {
+  readonly id = 'torbox' as const;
   constructor(
     private readonly fetcher: typeof fetch = fetch,
     private readonly baseUrl = 'https://api.torbox.app/v1/api',
@@ -136,14 +139,26 @@ export class TorBoxAdapter {
   public async checkCached(hashes: string[], apiKey?: string): Promise<Map<string, TorBoxCachedTorrent>> {
     this.token(apiKey);
     const result = new Map<string, TorBoxCachedTorrent>();
+    if (!hashes.length) return result;
+
+    const batches: string[][] = [];
     for (let offset = 0; offset < hashes.length; offset += 100) {
-      const batch = hashes.slice(offset, offset + 100).map(hash => hash.toLowerCase());
-      const data = await this.request('torrents/checkcached', apiKey, new URLSearchParams({
-        hash: batch.join(','), format: 'list', list_files: 'true',
-      }));
-      const rows = Array.isArray(data) ? data :
-        (typeof data === 'object' ? Object.entries(data).map(([hash, row]: [string, any]) => ({ ...row, hash })) : null);
-      if (!rows) throw new TorBoxError('Invalid TorBox cache response.');
+      batches.push(hashes.slice(offset, offset + 100).map(hash => hash.toLowerCase()));
+    }
+
+    const responses = await Promise.all(
+      batches.map(async (batch) => {
+        const data = await this.request('torrents/checkcached', apiKey, new URLSearchParams({
+          hash: batch.join(','), format: 'list', list_files: 'true',
+        }));
+        const rows = Array.isArray(data) ? data :
+          (typeof data === 'object' ? Object.entries(data).map(([hash, row]: [string, any]) => ({ ...row, hash })) : null);
+        if (!rows) throw new TorBoxError('Invalid TorBox cache response.');
+        return { batch, rows };
+      })
+    );
+
+    for (const { batch, rows } of responses) {
       for (const row of rows) {
         const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
         if (!batch.includes(hash)) continue;

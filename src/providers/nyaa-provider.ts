@@ -95,7 +95,7 @@ export class NyaaProvider implements TorrentProvider {
 
       try {
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(2500),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
           },
@@ -117,7 +117,7 @@ export class NyaaProvider implements TorrentProvider {
     const start = Date.now();
     try {
       const response = await this.fetcher(`${this.baseUrl}/?page=rss&q=test`, {
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(2500),
       });
       const healthy = response.ok;
       return {

@@ -7,6 +7,7 @@ export interface TasteProfile {
   history: unknown[];
   moviesOnly: boolean;
   hideWatched: boolean;
+  excludeAnime?: boolean;
   updatedAt: number;
 }
 
@@ -15,12 +16,13 @@ export function validateTasteProfile(value: any): TasteProfile {
   if (!value || typeof value !== 'object' || !Array.isArray(value.watchlist) || !Array.isArray(value.history)
       || !value.feedback || typeof value.feedback !== 'object' || Array.isArray(value.feedback)
       || typeof value.moviesOnly !== 'boolean' || typeof value.hideWatched !== 'boolean'
+      || (value.excludeAnime !== undefined && typeof value.excludeAnime !== 'boolean')
       || typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt)) throw new Error('Invalid profile');
   if (value.watchlist.length > 500 || value.history.length > 1000 || Object.keys(value.feedback).length > 1000) throw new Error('Profile too large');
   const item = (input: any): Record<string, unknown> => {
     if (!input || !Number.isInteger(input.id) || input.id <= 0 || !['movie', 'tv'].includes(input.mediaType)
         || typeof input.title !== 'string' || input.title.length > 500) throw new Error('Invalid catalog item');
-    const allowed = ['id', 'mediaType', 'title', 'originalTitle', 'overview', 'posterPath', 'backdropPath', 'releaseYear', 'voteAverage', 'genreIds'];
+    const allowed = ['id', 'mediaType', 'title', 'originalTitle', 'overview', 'posterPath', 'backdropPath', 'releaseYear', 'voteAverage', 'genreIds', 'originalLanguage', 'originCountry'];
     return Object.fromEntries(allowed.filter(key => input[key] !== undefined).map(key => [key, input[key]]));
   };
   const feedback = Object.fromEntries(Object.entries(value.feedback).map(([key, raw]: [string, any]) => {
@@ -35,7 +37,7 @@ export function validateTasteProfile(value: any): TasteProfile {
     return Object.fromEntries(['tmdbId', 'mediaType', 'season', 'episode', 'title', 'posterPath', 'position', 'duration', 'updatedAt']
       .filter(key => raw[key] !== undefined).map(key => [key, raw[key]]));
   });
-  return { feedback, watchlist: value.watchlist.map(item), history, moviesOnly: value.moviesOnly, hideWatched: value.hideWatched, updatedAt: value.updatedAt };
+  return { feedback, watchlist: value.watchlist.map(item), history, moviesOnly: value.moviesOnly, hideWatched: value.hideWatched, excludeAnime: value.excludeAnime ?? true, updatedAt: value.updatedAt };
 }
 
 export class TasteProfileStore {
