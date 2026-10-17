@@ -139,9 +139,13 @@ export interface VersionsResponse {
 
 export interface AIDiscoveryItem {
   title: string;
+  originalTitle?: string;
   year?: number;
   reason: string;
   searchKeyword: string;
+  confidence?: number;
+  distinguishingDetail?: string;
+  mediaType?: 'movie' | 'tv';
 }
 
 export interface AIDiscoveryResponse {

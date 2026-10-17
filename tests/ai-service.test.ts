@@ -136,7 +136,7 @@ test('Gemini findByDescription calls Gemini with specialized plot identifier pro
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_input: any, init: any) => {
     const instruction = JSON.parse(init.body).contents[0].parts[0].text;
-    assert.match(instruction, /expert film identifier/);
+    assert.match(instruction, /movie identification|expert film identifier/);
     assert.match(instruction, /plot/);
     return Response.json({
       candidates: [{
