@@ -196,8 +196,8 @@ export class ReleaseParser {
     episode: number | null;
     isSeasonPack: boolean;
   } {
-    // S01E02 or S01E02E03
-    const seMatch = clean.match(/\bS(\d{1,2})E(\d{1,3})\b/i);
+    // S01E02, S01 E02, or S01E02E03
+    const seMatch = clean.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
     if (seMatch) {
       return {
         season: parseInt(seMatch[1], 10),
@@ -206,7 +206,7 @@ export class ReleaseParser {
       };
     }
 
-    // 1x02
+    // 1x02 or 01x02
     const altMatch = clean.match(/\b(\d{1,2})x(\d{1,3})\b/i);
     if (altMatch) {
       return {
@@ -216,8 +216,21 @@ export class ReleaseParser {
       };
     }
 
-    // Season pack: S01, Season 1, Seasons 1-3, Complete Series, Сезон 1, Сезоны 1-3
-    const seasonOnly = clean.match(/\bS(\d{1,2})\b/i) || clean.match(/\b(?:Season|Сезон)\s*(\d{1,2})\b/i);
+    // Russian explicit season & episode: "Сезон 1 Серия 2", "1 сезон 2 серия"
+    const rusMatch = clean.match(/\b(?:Сезон|Season)\s*(\d{1,2})\s*(?:Сери[яи]|Episode)\s*(\d{1,3})\b/i)
+      || clean.match(/\b(\d{1,2})\s*(?:сезон|сезона)\s*(\d{1,3})\s*(?:сери[яи])\b/i);
+    if (rusMatch) {
+      return {
+        season: parseInt(rusMatch[1], 10),
+        episode: parseInt(rusMatch[2], 10),
+        isSeasonPack: false,
+      };
+    }
+
+    // Season pack: S01, Season 1, 1 сезон, Seasons 1-3, Complete Series, Сезон 1, Сезоны 1-3
+    const seasonOnly = clean.match(/\bS(\d{1,2})\b/i)
+      || clean.match(/\b(?:Season|Сезон)\s*(\d{1,2})\b/i)
+      || clean.match(/\b(\d{1,2})\s*(?:сезон|сезона|сезоны)\b/i);
     if (seasonOnly) {
       return {
         season: parseInt(seasonOnly[1], 10),

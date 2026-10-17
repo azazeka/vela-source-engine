@@ -1,4 +1,6 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { ProviderSearch } from '../services/provider-search';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 function decodeHtml(value: string): string {
@@ -83,7 +85,7 @@ export class TgxProvider implements TorrentProvider {
       try {
         const url = `${mirror}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(2500),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
           },
@@ -177,32 +179,29 @@ export class TgxProvider implements TorrentProvider {
       return [];
     }
 
-    let query: string;
-    if (request.type === 'episode') {
-      const title = request.seriesTitle || request.originalTitle || request.title;
-      const s = String(request.season ?? 1).padStart(2, '0');
-      const e = String(request.episode ?? 1).padStart(2, '0');
-      query = `${title} S${s}E${e}`;
-    } else {
-      const title = request.originalTitle || request.title;
-      query = `${title} ${request.year || ''}`.trim();
-    }
+    const queries = request.type === 'episode'
+      ? QueryBuilder.getEpisodeSearchQueries(request) : [request.originalTitle || request.title, request.title].map(title => `${QueryBuilder.cleanTitle(title)} ${request.year || ""}`.trim());
 
-    const cleanQuery = query.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!cleanQuery) return [];
+    if (queries.length === 0) return [];
 
     // Mainstream movies & TV packs/episodes categories on TGX:
     // c3=1 (Movies 4K UHD), c42=1 (Movies HD), c1=1 (Movies SD), c41=1 (TV HD), c5=1 (TV SD), c11=1 (TV Packs)
     const mediaCats = 'c3=1&c42=1&c1=1&c41=1&c5=1&c11=1';
-    const path = `/torrents.php?search=${encodeURIComponent(cleanQuery)}&${mediaCats}&sort=seeders&order=desc`;
 
-    try {
-      const { html, mirror } = await this.fetchHtml(path);
-      return this.parseReleasesFromHtml(html, mirror);
-    } catch (err) {
-      console.warn(`[TgxProvider] Search failed for "${cleanQuery}": ${(err as Error).message}`);
+    return ProviderSearch.collect(request, queries, async rawQuery => {
+      const cleanQuery = rawQuery.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!cleanQuery) return [];
+
+      const path = `/torrents.php?search=${encodeURIComponent(cleanQuery)}&${mediaCats}&sort=seeders&order=desc`;
+      try {
+        const { html, mirror } = await this.fetchHtml(path);
+        const releases = this.parseReleasesFromHtml(html, mirror);
+        return releases;
+      } catch (err) {
+        console.warn(`[TgxProvider] Search failed for "${cleanQuery}": ${(err as Error).message}`);
+      }
       return [];
-    }
+    });
   }
 
   public async health(): Promise<ProviderHealth> {

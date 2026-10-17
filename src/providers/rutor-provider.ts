@@ -1,4 +1,6 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { ProviderSearch } from '../services/provider-search';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 function decodeHtml(value: string): string {
@@ -79,7 +81,7 @@ export class RutorProvider implements TorrentProvider {
       try {
         const url = `${mirror}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(2000),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
           },
@@ -144,53 +146,15 @@ export class RutorProvider implements TorrentProvider {
       return [];
     }
 
-    const title = (
-      request.type === 'episode'
-        ? (request.seriesTitle || request.title)
-        : (request.title || request.originalTitle)
-    ).replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-
-    if (!title) return [];
-
-    let query: string;
-    if (request.type === 'episode') {
-      const s = String(request.season ?? 1).padStart(2, '0');
-      const e = String(request.episode ?? 1).padStart(2, '0');
-      query = `${title} S${s}E${e}`;
-    } else {
-      query = request.originalTitle && request.originalTitle !== request.title
-        ? `${request.title} ${request.originalTitle}`
-        : `${title} ${request.year}`;
-    }
-
-    const path = `/search/0/0/0/0/${encodeURIComponent(query)}`;
-    let result = await this.fetchHtml(path);
-    let releases = this.parseReleasesFromHtml(result.html, result.mirror);
-
-    // If exact SxxExx had no results for series, retry with season pack (e.g. S01)
-    if (releases.length === 0 && request.type === 'episode') {
-      const seasonQuery = `${title} S${String(request.season ?? 1).padStart(2, '0')}`;
-      const seasonPath = `/search/0/0/0/0/${encodeURIComponent(seasonQuery)}`;
-      try {
-        result = await this.fetchHtml(seasonPath);
-        releases = this.parseReleasesFromHtml(result.html, result.mirror);
-      } catch {
-        // Ignore fallback error
-      }
-    }
-
-    // If combined movie search had no results, retry with just originalTitle or title
-    if (releases.length === 0 && request.type === 'movie' && request.originalTitle && request.originalTitle !== request.title) {
-      const fallbackPath = `/search/0/0/0/0/${encodeURIComponent(`${request.originalTitle} ${request.year}`)}`;
-      try {
-        result = await this.fetchHtml(fallbackPath);
-        releases = this.parseReleasesFromHtml(result.html, result.mirror);
-      } catch {
-        // Ignore fallback error
-      }
-    }
-
-    return releases;
+    const titles = QueryBuilder.getTitles(request);
+    const queries = request.type === 'episode'
+      ? [QueryBuilder.getRussianEpisodeQueries(request)[0], titles.cyrillic ?? titles.primary,
+         ...QueryBuilder.getEpisodeSearchQueries(request)].filter((q): q is string => !!q)
+      : [request.originalTitle || request.title, request.title].map(title => `${QueryBuilder.cleanTitle(title)} ${request.year || ""}`.trim());
+    return ProviderSearch.collect(request, queries, async query => {
+      const result = await this.fetchHtml(`/search/0/0/0/0/${encodeURIComponent(query)}`);
+      return this.parseReleasesFromHtml(result.html, result.mirror);
+    });
   }
 
   async health(): Promise<ProviderHealth> {

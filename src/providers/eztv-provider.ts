@@ -1,4 +1,5 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 interface EztvTorrent {
@@ -77,60 +78,67 @@ export class EztvProvider implements TorrentProvider {
       return [];
     }
 
-    const seriesTitle = (request.seriesTitle || request.originalTitle || request.title || '')
-      .replace(/[:\/\\?*|"<>]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const englishTitle = QueryBuilder.getEnglishOrOriginalTitle(request);
+    const primaryTitle = QueryBuilder.cleanTitle(englishTitle || request.seriesTitle || request.originalTitle || request.title);
+    const altTitle = QueryBuilder.cleanTitle(request.title);
+    const titles: string[] = [];
+    if (primaryTitle) titles.push(primaryTitle);
+    if (altTitle && altTitle.toLowerCase() !== primaryTitle.toLowerCase()) {
+      titles.push(altTitle);
+    }
 
-    if (!seriesTitle) return [];
+    if (titles.length === 0) return [];
 
-    try {
-      const data: EztvResponse = await this.fetchJson(`/get-torrents?search=${encodeURIComponent(seriesTitle)}&limit=100`);
-      if (!data || !Array.isArray(data.torrents)) return [];
+    const targetSeason = request.season ?? 1;
+    const targetEpisode = request.episode ?? 1;
+    const seasonPadded = String(targetSeason).padStart(2, '0');
+    const episodePadded = String(targetEpisode).padStart(2, '0');
+    const epPattern = new RegExp(`S${seasonPadded}E${episodePadded}|\\b${targetSeason}x${episodePadded}\\b`, 'i');
 
-      const targetSeason = request.season ?? 1;
-      const targetEpisode = request.episode ?? 1;
-      const seasonPadded = String(targetSeason).padStart(2, '0');
-      const episodePadded = String(targetEpisode).padStart(2, '0');
-      const epPattern = new RegExp(`S${seasonPadded}E${episodePadded}|\\b${targetSeason}x${episodePadded}\\b`, 'i');
+    for (const seriesTitle of titles) {
+      try {
+        const data: EztvResponse = await this.fetchJson(`/get-torrents?search=${encodeURIComponent(seriesTitle)}&limit=100`);
+        if (!data || !Array.isArray(data.torrents) || data.torrents.length === 0) continue;
 
-      const releases: RawRelease[] = [];
-      for (const item of data.torrents) {
-        if (!item || !item.hash || !item.title) continue;
+        const releases: RawRelease[] = [];
+        for (const item of data.torrents) {
+          if (!item || !item.hash || !item.title) continue;
 
-        const normalizedHash = item.hash.trim().toLowerCase();
-        if (!/^[a-f0-9]{40}$/.test(normalizedHash)) continue;
+          const normalizedHash = item.hash.trim().toLowerCase();
+          if (!/^[a-f0-9]{40}$/.test(normalizedHash)) continue;
 
-        const releaseName = item.filename || item.title;
-        // Filter for specific episode if requested
-        if (!epPattern.test(releaseName)) {
-          // Check if it's explicitly matched by item properties
-          const itemS = parseInt(item.season || '0', 10);
-          const itemE = parseInt(item.episode || '0', 10);
-          if (itemS !== targetSeason || itemE !== targetEpisode) {
-            continue;
+          const releaseName = item.filename || item.title;
+          // Filter for specific episode if requested
+          if (!epPattern.test(releaseName)) {
+            // Check if it's explicitly matched by item properties
+            const itemS = parseInt(item.season || '0', 10);
+            const itemE = parseInt(item.episode || '0', 10);
+            if (itemS !== targetSeason || itemE !== targetEpisode) {
+              continue;
+            }
           }
+
+          const size = typeof item.size_bytes === 'string' ? parseInt(item.size_bytes, 10) : Number(item.size_bytes);
+          const seeds = Number(item.seeds ?? 0);
+
+          releases.push({
+            provider: this.id,
+            name: releaseName.trim(),
+            infoHash: normalizedHash,
+            magnet: item.magnet_url || `magnet:?xt=urn:btih:${normalizedHash}&dn=${encodeURIComponent(releaseName.trim())}`,
+            sizeBytes: Number.isSafeInteger(size) && size > 0 ? size : 0,
+            seeders: Number.isFinite(seeds) ? Math.max(0, seeds) : 0,
+            detailsUrl: item.episode_url || null,
+          });
         }
 
-        const size = typeof item.size_bytes === 'string' ? parseInt(item.size_bytes, 10) : Number(item.size_bytes);
-        const seeds = Number(item.seeds ?? 0);
-
-        releases.push({
-          provider: this.id,
-          name: releaseName.trim(),
-          infoHash: normalizedHash,
-          magnet: item.magnet_url || `magnet:?xt=urn:btih:${normalizedHash}&dn=${encodeURIComponent(releaseName.trim())}`,
-          sizeBytes: Number.isSafeInteger(size) && size > 0 ? size : 0,
-          seeders: Number.isFinite(seeds) ? Math.max(0, seeds) : 0,
-          detailsUrl: item.episode_url || null,
-        });
+        if (releases.length > 0) return releases;
+      } catch (error) {
+        console.warn(`[EztvProvider] Search failed for "${seriesTitle}": ${(error as Error).message}`);
       }
-
-      return releases;
-    } catch (error) {
-      console.warn(`[EztvProvider] Search failed for "${seriesTitle}": ${(error as Error).message}`);
-      return [];
     }
+
+    return [];
   }
 
   async health(): Promise<ProviderHealth> {

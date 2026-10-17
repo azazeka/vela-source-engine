@@ -114,3 +114,53 @@ test('AI explanations cannot replace the release selected by the quality preset'
     assert.equal(result.source, 'heuristic');
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('AIService findByDescription identifies movies from plot description', async () => {
+  const service = new AIService();
+
+  // Test time loop / Groundhog Day
+  const timeLoop = await service.findByDescription('фильм где главный герой каждый день просыпается в один и тот же день');
+  assert.ok(timeLoop.suggestions.some(s => s.title.includes('Groundhog Day') || s.title.includes('Edge of Tomorrow')));
+  assert.equal(timeLoop.source, 'heuristic');
+
+  // Test Mars survival
+  const mars = await service.findByDescription('астронавт остался один на марсе и выращивает картошку чтобы выжить');
+  assert.ok(mars.suggestions.some(s => s.title.includes('The Martian')));
+
+  // Test phone booth sniper
+  const sniper = await service.findByDescription('человек застрял в телефонной будке и снайпер держит его на прицеле');
+  assert.ok(sniper.suggestions.some(s => s.title.includes('Phone Booth')));
+});
+
+test('Gemini findByDescription calls Gemini with specialized plot identifier prompt', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: any, init: any) => {
+    const instruction = JSON.parse(init.body).contents[0].parts[0].text;
+    assert.match(instruction, /expert film identifier/);
+    assert.match(instruction, /plot/);
+    return Response.json({
+      candidates: [{
+        content: {
+          parts: [{
+            text: JSON.stringify({
+              suggestions: [
+                { title: 'Groundhog Day', year: 1993, reason: 'A weatherman relives February 2nd over and over.', searchKeyword: 'Groundhog Day' },
+                { title: 'Edge of Tomorrow', year: 2014, reason: 'A soldier relives a battle repeatedly.', searchKeyword: 'Edge of Tomorrow' }
+              ]
+            })
+          }]
+        }
+      }]
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await new AIService('test-key').findByDescription('фильм про временную петлю');
+    assert.equal(result.source, 'gemini');
+    assert.equal(result.suggestions[0].title, 'Groundhog Day');
+    assert.equal(result.suggestions.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+

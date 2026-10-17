@@ -2,7 +2,7 @@ import { NormalizedRelease, RawRelease } from '../types';
 import { ReleaseParser } from './release-parser';
 
 export class Normalizer {
-  public static normalize(rawReleases: RawRelease[]): NormalizedRelease[] {
+  public static normalize(rawReleases: RawRelease[], minimumSizeBytes = 50 * 1024 * 1024): NormalizedRelease[] {
     const dedupeMap = new Map<string, NormalizedRelease>();
 
     for (const raw of rawReleases) {
@@ -17,7 +17,7 @@ export class Normalizer {
       }
 
       // Filter invalid size
-      if (!raw.sizeBytes || raw.sizeBytes < 50 * 1024 * 1024) { // Under 50MB is almost certainly a sample or corrupt
+      if (!raw.sizeBytes || raw.sizeBytes < minimumSizeBytes) {
         continue;
       }
 

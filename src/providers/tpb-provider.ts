@@ -1,4 +1,6 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { ProviderSearch } from '../services/provider-search';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 interface ApibayItem {
@@ -35,7 +37,7 @@ export class TpbProvider implements TorrentProvider {
       try {
         const url = `${base}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(6000),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
             'Accept': 'application/json',
@@ -56,30 +58,24 @@ export class TpbProvider implements TorrentProvider {
       return [];
     }
 
-    let query: string;
-    if (request.type === 'episode') {
-      const title = request.seriesTitle || request.originalTitle || request.title;
-      const s = String(request.season ?? 1).padStart(2, '0');
-      const e = String(request.episode ?? 1).padStart(2, '0');
-      query = `${title} S${s}E${e}`;
-    } else {
-      const title = request.originalTitle || request.title;
-      query = `${title} ${request.year || ''}`.trim();
-    }
+    const queries = request.type === 'episode'
+      ? QueryBuilder.getEpisodeSearchQueries(request) : [request.originalTitle || request.title, request.title].map(title => `${QueryBuilder.cleanTitle(title)} ${request.year || ""}`.trim());
 
-    const cleanQuery = query
-      .replace(/[:\/\\?*|"<>]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    if (queries.length === 0) return [];
 
-    if (!cleanQuery) return [];
+    return ProviderSearch.collect(request, queries, async rawQuery => {
+      const cleanQuery = rawQuery
+        .replace(/[:\/\\?*|"<>]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleanQuery) return [];
 
-    try {
-      // Category 200 = Video (Movies, TV shows, HD, UHD)
-      const data: ApibayItem[] = await this.fetchJson(`/q.php?q=${encodeURIComponent(cleanQuery)}&cat=200`);
-      if (!Array.isArray(data)) return [];
+      try {
+        // Category 200 = Video (Movies, TV shows, HD, UHD)
+        const data: ApibayItem[] = await this.fetchJson(`/q.php?q=${encodeURIComponent(cleanQuery)}&cat=200`);
+        if (!Array.isArray(data) || data.length === 0 || (data.length === 1 && data[0].id === '0')) return [];
 
-      const releases: RawRelease[] = [];
+        const releases: RawRelease[] = [];
       for (const item of data) {
         if (!item || !item.name || item.id === '0' || !item.info_hash) continue;
         const normalizedHash = item.info_hash.trim().toLowerCase();
@@ -101,11 +97,12 @@ export class TpbProvider implements TorrentProvider {
         });
       }
 
-      return releases;
-    } catch (error) {
-      console.warn(`[TpbProvider] Search failed for "${cleanQuery}": ${(error as Error).message}`);
+        return releases;
+      } catch (error) {
+        console.warn(`[TpbProvider] Search failed for "${cleanQuery}": ${(error as Error).message}`);
+      }
       return [];
-    }
+    });
   }
 
   async health(): Promise<ProviderHealth> {

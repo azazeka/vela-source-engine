@@ -23,10 +23,12 @@ RUN npm run build
 # ==============================================================================
 # Stage 2: Production runtime image
 FROM node:22-alpine AS runner
+ARG VELA_BUILD_ID=development
 
 WORKDIR /app
 
 ENV NODE_ENV=production \
+    VELA_BUILD_ID=${VELA_BUILD_ID} \
     PORT=3000 \
     HOST=0.0.0.0 \
     VELA_PROFILE_DIRECTORY=/app/data/profiles
@@ -37,6 +39,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy compiled artifacts from builder stage
 COPY --from=builder /app/dist ./dist
+COPY deploy/verify-series.cjs ./deploy/verify-series.cjs
 
 # Writable profile directory; mount /app/data on persistent storage in production.
 RUN mkdir -p /app/data/profiles && chown -R node:node /app/data

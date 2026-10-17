@@ -1,4 +1,5 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 function parseNyaaSize(rawVal: string, rawUnit: string): number {
@@ -70,38 +71,46 @@ export class NyaaProvider implements TorrentProvider {
       return [];
     }
 
-    const title = (
-      request.type === 'episode'
-        ? (request.seriesTitle || request.originalTitle || request.title)
-        : (request.originalTitle || request.title)
-    ).replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-
-    if (!title) return [];
-
-    let query: string;
-    if (request.type === 'episode') {
-      const e = String(request.episode ?? 1).padStart(2, '0');
-      query = `${title} - ${e}`;
-    } else {
-      query = `${title} ${request.year || ''}`.trim();
+    const englishTitle = QueryBuilder.getEnglishOrOriginalTitle(request);
+    const primaryTitle = QueryBuilder.cleanTitle(englishTitle || request.seriesTitle || request.originalTitle || request.title);
+    const altTitle = QueryBuilder.cleanTitle(request.title);
+    const titles: string[] = [];
+    if (primaryTitle) titles.push(primaryTitle);
+    if (altTitle && altTitle.toLowerCase() !== primaryTitle.toLowerCase()) {
+      titles.push(altTitle);
     }
 
-    const url = `${this.baseUrl}/?page=rss&q=${encodeURIComponent(query)}&c=0_0&f=0`;
+    if (titles.length === 0) return [];
 
-    try {
-      const response = await this.fetcher(url, {
-        signal: AbortSignal.timeout(8000),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
-        },
-      });
+    for (const title of titles) {
+      let query: string;
+      if (request.type === 'episode') {
+        const e = String(request.episode ?? 1).padStart(2, '0');
+        query = `${title} - ${e}`;
+      } else {
+        query = `${title} ${request.year || ''}`.trim();
+      }
 
-      if (!response.ok) return [];
-      const xml = await response.text();
-      return this.parseReleasesFromRss(xml);
-    } catch {
-      return [];
+      const url = `${this.baseUrl}/?page=rss&q=${encodeURIComponent(query)}&c=0_0&f=0`;
+
+      try {
+        const response = await this.fetcher(url, {
+          signal: AbortSignal.timeout(8000),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
+          },
+        });
+
+        if (!response.ok) continue;
+        const xml = await response.text();
+        const releases = this.parseReleasesFromRss(xml);
+        if (releases.length > 0) return releases;
+      } catch {
+        // Continue to next title fallback
+      }
     }
+
+    return [];
   }
 
   async health(): Promise<ProviderHealth> {

@@ -7,11 +7,12 @@ export interface MediaRequest {
   originalTitle: string;
   year: number;
   preferredLanguages?: string[];
+  preferredTorrentHash?: string;
+  preferredReleaseGroup?: string;
   season?: number;
   episode?: number;
   seriesTitle?: string;
   episodeTitle?: string;
-  isAdult?: boolean;
 }
 
 export interface RawRelease {
@@ -112,6 +113,8 @@ export interface StreamDescriptor {
   fileName: string;
   sizeBytes: number;
   expiresAt: string | null;
+  seasonNumber?: number;
+  episodeNumber?: number;
 }
 
 export interface SessionStartResponse {

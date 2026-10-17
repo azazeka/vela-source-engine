@@ -6,12 +6,14 @@ import { CacheManager } from '../services/cache-manager';
 import { RankingEngine } from '../services/ranking-engine';
 import { SourceEngine } from '../services/source-engine';
 import { TorBoxAdapter, TorBoxError } from '../services/torbox-adapter';
+import { TrailerResolver } from '../services/trailer-resolver';
 import { CandidateSummary, MediaRequest, PlayCandidate, QualityPreset } from '../types';
 
 export function createRouter(
   sourceEngine: SourceEngine,
   torboxAdapter: TorBoxAdapter,
-  aiService: AIService = new AIService()
+  aiService: AIService = new AIService(),
+  trailerResolver: TrailerResolver = new TrailerResolver()
 ): Router {
   const router = Router();
   const tasteProfiles = createTasteProfileRepository();
@@ -34,6 +36,8 @@ export function createRouter(
   router.get('/health', (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
+      build: process.env.VELA_BUILD_ID ?? 'development',
+      episodeMatching: 'strict-v2',
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.floor(process.uptime()),
     });
@@ -66,16 +70,34 @@ export function createRouter(
   // AI 1: POST /ai/discover - Semantic natural language & mood discovery
   router.post('/ai/discover', async (req: Request, res: Response) => {
     try {
-      const { prompt } = req.body;
+      const { prompt, mode } = req.body;
       if (!prompt || typeof prompt !== 'string') {
         res.status(400).json({ error: 'Prompt is required and must be a string' });
         return;
       }
       const customKey = getGeminiKey(req);
-      const result = await aiService.discover(prompt, customKey);
+      const result = mode === 'description'
+        ? await aiService.findByDescription(prompt, customKey)
+        : await aiService.discover(prompt, customKey);
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'AI discovery failed' });
+    }
+  });
+
+  // AI 1b: POST /ai/find-by-description - Identify movie/series by plot description
+  router.post('/ai/find-by-description', async (req: Request, res: Response) => {
+    try {
+      const description = req.body.description || req.body.prompt;
+      if (!description || typeof description !== 'string') {
+        res.status(400).json({ error: 'Description is required and must be a string' });
+        return;
+      }
+      const customKey = getGeminiKey(req);
+      const result = await aiService.findByDescription(description, customKey);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'AI find-by-description failed' });
     }
   });
 
@@ -92,6 +114,35 @@ export function createRouter(
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'AI release explanation failed' });
+    }
+  });
+
+  // 3. GET /trailer/stream/:key (Public trailer stream resolver for Apple TV)
+  router.get('/trailer/stream/:key?', async (req: Request, res: Response) => {
+    try {
+      const key = (req.params.key || req.query.key) as string;
+      if (!key) {
+        res.status(400).json({ error: 'Missing trailer key' });
+        return;
+      }
+      const redirect = req.query.redirect === 'true' || req.query.redirect === '1';
+      const result = await trailerResolver.resolve(key);
+
+      if (redirect) {
+        res.redirect(302, result.streamUrl);
+        return;
+      }
+
+      res.json({
+        key,
+        streamUrl: result.streamUrl,
+        format: result.format,
+        quality: result.quality,
+        title: result.title,
+      });
+    } catch (err: any) {
+      console.warn(`[API] /trailer/stream failed:`, err?.message ?? err);
+      res.status(502).json({ error: err?.message ?? 'Failed to resolve trailer stream' });
     }
   });
 
@@ -142,7 +193,7 @@ export function createRouter(
     try {
       const request = req.body.request as MediaRequest;
       const preset = (req.body.preset as QualityPreset) || 'best';
-      if (!request || (!request.isAdult && !request.tmdbId) || !request.title) {
+      if (!request || !request.tmdbId || !request.title) {
         res.status(400).json({ error: 'Invalid MediaRequest payload' });
         return;
       }
@@ -150,66 +201,6 @@ export function createRouter(
       const apiKey = getApiKey(req);
       const candidates = await sourceEngine.searchCandidates(request, preset, apiKey, req.body.fresh === true);
       res.json({
-        mediaKey: sourceEngine.getMediaKey(request),
-        candidates,
-      });
-    } catch (err: any) {
-      res.status(err instanceof TorBoxError ? err.statusCode : 500).json({ error: err.message, code: err instanceof TorBoxError ? err.code : undefined, diagnostic: err instanceof TorBoxError ? err.diagnostic : undefined });
-    }
-  });
-
-  // 4b. POST /sources/adult/search (Adult content search & catalog browse)
-  router.post('/sources/adult/search', async (req: Request, res: Response) => {
-    try {
-      const query = typeof req.body.query === 'string' ? req.body.query.trim() : '';
-      const preset = (req.body.preset as QualityPreset) || 'best';
-      const effectiveQuery = query || 'Trending';
-
-      const request: MediaRequest = {
-        type: 'movie',
-        tmdbId: -1,
-        title: effectiveQuery,
-        originalTitle: effectiveQuery,
-        year: new Date().getFullYear(),
-        isAdult: true,
-      };
-
-      const apiKey = getApiKey(req);
-      let candidates: PlayCandidate[];
-      const lower = effectiveQuery.toLowerCase();
-      if (lower === 'gay trending' || lower === 'trending gay' || lower === 'gay') {
-        const gayTopStudios = ['BelAmi', 'Falcon Studios', 'Sean Cody', 'Lucas Entertainment', 'CockyBoys'];
-        const results = await Promise.allSettled(
-          gayTopStudios.map(studio => {
-            const subReq: MediaRequest = {
-              type: 'movie',
-              tmdbId: -1,
-              title: studio,
-              originalTitle: studio,
-              year: new Date().getFullYear(),
-              isAdult: true,
-            };
-            return sourceEngine.searchCandidates(subReq, preset, apiKey);
-          })
-        );
-        const seenHashes = new Set<string>();
-        const merged: PlayCandidate[] = [];
-        for (const res of results) {
-          if (res.status === 'fulfilled') {
-            for (const cand of res.value) {
-              if (!seenHashes.has(cand.torrentHash)) {
-                seenHashes.add(cand.torrentHash);
-                merged.push(cand);
-              }
-            }
-          }
-        }
-        candidates = RankingEngine.rank(merged, preset).slice(0, 100);
-      } else {
-        candidates = await sourceEngine.searchCandidates(request, preset, apiKey);
-      }
-      res.json({
-        query: effectiveQuery,
         mediaKey: sourceEngine.getMediaKey(request),
         candidates,
       });
@@ -245,7 +236,7 @@ export function createRouter(
       const candidateId = req.body.candidateId as string | undefined;
       const preset = (req.body.preset as QualityPreset) || 'best';
 
-      if (!request || (!request.isAdult && !request.tmdbId) || !request.title) {
+      if (!request || !request.tmdbId || !request.title) {
         res.status(400).json({ error: 'Invalid MediaRequest payload' });
         return;
       }

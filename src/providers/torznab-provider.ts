@@ -1,4 +1,6 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { ProviderSearch } from '../services/provider-search';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 function decodeXml(value: string): string {
@@ -57,7 +59,7 @@ export class TorznabProvider implements TorrentProvider {
     readonly name = 'Torznab'
   ) {}
 
-  private url(query?: string, isAdult?: boolean): URL {
+  private url(query?: string): URL {
     let url: URL;
     try { url = new URL(this.endpoint); } catch { throw new Error('Torznab endpoint is not configured.'); }
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
@@ -72,10 +74,6 @@ export class TorznabProvider implements TorrentProvider {
       url.searchParams.set('limit', '100');
       if (this.categories) {
         url.searchParams.set('cat', this.categories);
-      } else if (isAdult) {
-        const lower = (query || '').toLowerCase();
-        const isGay = /\b(gay|belami|seancody|sean cody|falcon|lucas|raging stallion|cockyboys|corbin|helix|timtales|men\.com)\b/i.test(lower);
-        url.searchParams.set('cat', isGay ? '6070,6000' : '6000');
       }
     }
     if (this.apiKey) url.searchParams.set('apikey', this.apiKey);
@@ -93,50 +91,15 @@ export class TorznabProvider implements TorrentProvider {
 
   async search(request: MediaRequest): Promise<RawRelease[]> {
     if (!this.endpoint) return [];
-    if (request.isAdult) {
-      const title = (request.title || request.originalTitle || '').replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!title) return [];
-      const response = await this.get(this.url(title, true));
-      if (!response.ok) throw new Error(`Torznab indexer returned HTTP ${response.status}.`);
+    const queries = request.type === 'episode' ? QueryBuilder.getEpisodeSearchQueries(request)
+      : [request.originalTitle || request.title, request.title].map(title => `${QueryBuilder.cleanTitle(title)} ${request.year || ""}`.trim());
+    return ProviderSearch.collect(request, queries, async query => {
+      const response = await this.get(this.url(query));
+      if (!response.ok) return [];
       const xml = await response.text();
-      if (xml.length > 2_000_000) throw new Error('Torznab response is too large.');
+      if (xml.length > 2_000_000) return [];
       return this.parseReleasesFromXml(xml);
-    }
-    const rawTitle = request.type === 'episode' ? (request.seriesTitle || request.originalTitle || request.title) :
-      (request.originalTitle || request.title);
-    const title = rawTitle.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-    const query = request.type === 'episode'
-      ? `${title} S${String(request.season ?? 1).padStart(2, '0')}E${String(request.episode ?? 1).padStart(2, '0')}`
-      : `${title} ${request.year}`;
-    const response = await this.get(this.url(query));
-    if (!response.ok) throw new Error(`Torznab indexer returned HTTP ${response.status}.`);
-    const xml = await response.text();
-    if (xml.length > 2_000_000) throw new Error('Torznab response is too large.');
-    let releases = this.parseReleasesFromXml(xml);
-
-    // If no releases found, try searching with alternative title (e.g. localized Russian vs original English)
-    if (releases.length === 0 && request.title && request.originalTitle) {
-      const altTitleRaw = rawTitle === request.originalTitle ? request.title : request.originalTitle;
-      const altTitle = altTitleRaw.replace(/[:\/\\?*|"<>]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (altTitle && altTitle.toLowerCase() !== title.toLowerCase()) {
-        const altQuery = request.type === 'episode'
-          ? `${altTitle} S${String(request.season ?? 1).padStart(2, '0')}E${String(request.episode ?? 1).padStart(2, '0')}`
-          : `${altTitle} ${request.year}`;
-        if (altQuery !== query) {
-          try {
-            const altResponse = await this.get(this.url(altQuery));
-            if (altResponse.ok) {
-              const altXml = await altResponse.text();
-              releases = this.parseReleasesFromXml(altXml);
-            }
-          } catch {
-            // Ignore secondary fallback errors
-          }
-        }
-      }
-    }
-
-    return releases;
+    });
   }
 
   private parseReleasesFromXml(xml: string): RawRelease[] {

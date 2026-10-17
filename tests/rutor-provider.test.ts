@@ -62,8 +62,10 @@ describe('RutorProvider', () => {
 
   it('searches with custom fetcher and formats query for movie and series', async () => {
     let capturedUrl = '';
+    const capturedUrls: string[] = [];
     const mockFetcher = (async (url: any) => {
       capturedUrl = String(url);
+      capturedUrls.push(capturedUrl);
       return new Response(sampleHtml, { status: 200 });
     }) as typeof fetch;
 
@@ -76,7 +78,7 @@ describe('RutorProvider', () => {
       assert.equal(movieResults.length, 2);
 
       await provider.search(episodeRequest);
-      assert.ok(capturedUrl.includes('S02E04') || capturedUrl.includes('S02'));
+      assert.ok(capturedUrls.some(url => url.includes('S02E04') || url.includes('S02')));
     } finally {
       delete process.env.ENABLE_RUTOR_IN_TESTS;
     }

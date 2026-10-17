@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { MediaRequest, StreamDescriptor, TorBoxCachedTorrent, TorBoxFile } from '../types';
 import { FileMatcher } from './file-matcher';
+import { ReleaseIdentity } from './release-identity';
 
 export interface LibraryTorrent extends TorBoxCachedTorrent {
   id: number;
@@ -179,7 +180,8 @@ export class TorBoxAdapter {
   }
 
   public async requestDownloadLink(
-    torrentHash: string, fileId: number, apiKey?: string, request?: MediaRequest, cachedFiles?: TorBoxFile[], allowUncached: boolean = true
+    torrentHash: string, fileId: number, apiKey?: string, request?: MediaRequest, cachedFiles?: TorBoxFile[], allowUncached: boolean = true,
+    selectedFile?: { name: string; size: number }
   ): Promise<StreamDescriptor> {
     const normHash = torrentHash.toLowerCase();
     // Resolve the hash to the account's numeric torrent ID and real file IDs.
@@ -249,7 +251,18 @@ export class TorBoxAdapter {
     const availableFiles = torrent.files;
 
     // 1. Match using request metadata
-    let file = request ? FileMatcher.matchFile(request, availableFiles) : null;
+    if (request && !ReleaseIdentity.matches(torrent.name, request)) {
+      throw new TorBoxError('The torrent does not match the requested title.', 404);
+    }
+    let selectedFiles = availableFiles;
+    if (selectedFile) {
+      const basename = (name: string) => name.replace(/\\/g, '/').split('/').pop();
+      const exact = availableFiles.filter(file => file.name === selectedFile.name && file.size === selectedFile.size);
+      const byBasename = availableFiles.filter(file => basename(file.name) === basename(selectedFile.name) && file.size === selectedFile.size);
+      selectedFiles = exact.length ? exact : byBasename.length === 1 ? byBasename : [];
+      if (!selectedFiles.length) throw new TorBoxError('The selected episode file is no longer available.', 404);
+    }
+    let file = request ? FileMatcher.matchFile(request, selectedFiles, torrent.name) : null;
 
     // 2. Fall back to fileId if provided
     if (!file && !request && fileId >= 0) {
@@ -284,7 +297,8 @@ export class TorBoxAdapter {
     try { url = new URL(rawURL); } catch { throw new TorBoxError('Invalid TorBox stream URL.'); }
     if (url.protocol !== 'https:') throw new TorBoxError('TorBox stream URL must use HTTPS.');
     return { streamUrl: url.toString(), mimeType: /\.mkv$/i.test(file.name) ? 'video/x-matroska' : 'video/mp4',
-      fileName: file.name, sizeBytes: file.size, expiresAt: null };
+      fileName: file.name, sizeBytes: file.size, expiresAt: null,
+      ...(request?.type === 'episode' ? { seasonNumber: request.season ?? 1, episodeNumber: request.episode ?? 1 } : {}) };
   }
 
   public async health(apiKey?: string): Promise<'ok' | 'degraded' | 'unauthorized' | 'down'> {

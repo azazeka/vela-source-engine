@@ -76,13 +76,14 @@ describe('TorznabProvider', () => {
   });
 
   it('uses the series title and exact episode in its query', async () => {
-    let query = '';
+    const queries: string[] = [];
     const provider = new TorznabProvider('https://indexer.example/api', '', (async (input: any) => {
-      query = new URL(String(input)).searchParams.get('q') ?? '';
+      queries.push(new URL(String(input)).searchParams.get('q') ?? '');
       return new Response('<rss><channel /></rss>');
     }) as typeof fetch);
     await provider.search(episodeRequest);
-    assert.equal(query, 'Silo S02E04');
+    assert.equal(queries[0], 'Silo S02E04');
+    assert.ok(queries.includes('Silo S02'));
   });
 
   it('ignores results without a valid torrent hash and reports indexer health', async () => {

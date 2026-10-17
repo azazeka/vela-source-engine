@@ -12,6 +12,7 @@ import { CacheManager } from './cache-manager';
 import { FileMatcher } from './file-matcher';
 import { Normalizer } from './normalizer';
 import { RankingEngine } from './ranking-engine';
+import { ReleaseIdentity } from './release-identity';
 import { TorBoxAdapter, TorBoxError } from './torbox-adapter';
 
 export class SourceEngine {
@@ -27,9 +28,6 @@ export class SourceEngine {
   }
 
   public getMediaKey(request: MediaRequest): string {
-    if (request.isAdult) {
-      return `adult:${encodeURIComponent(request.title.toLowerCase().trim())}`;
-    }
     if (request.type === 'movie') {
       return `movie:${request.tmdbId}`;
     }
@@ -48,7 +46,7 @@ export class SourceEngine {
     // 1. Check cache first
     const cached = CacheManager.getCandidates(mediaKey, scope);
     if (!fresh && cached && cached.length > 0) {
-      return RankingEngine.rank(cached, preset);
+      return RankingEngine.rank(cached.filter(candidate => ReleaseIdentity.matches(candidate.rawReleaseName, request)), preset);
     }
 
     if (fresh) CacheManager.setCandidates(mediaKey, [], undefined, scope);
@@ -56,12 +54,7 @@ export class SourceEngine {
     // Provider fan-out with bounded searches; account pagination may take longer than a single request.
     const rawReleases: RawRelease[] = [];
     const providerErrors: unknown[] = [];
-    const targetProviders = this.providers.filter((provider) => {
-      if (request.isAdult) {
-        return provider.isAdult === true || provider.id === 'torbox-library' || provider.id.startsWith('torznab');
-      }
-      return !provider.isAdult;
-    });
+    const targetProviders = this.providers;
 
     const searchPromises = targetProviders.map(async (provider) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,14 +76,15 @@ export class SourceEngine {
     if (rawReleases.length === 0 && providerErrors.length > 0) throw providerErrors[0];
 
     // 4. Normalizer & Deduplicator
-    const normalized = Normalizer.normalize(rawReleases);
+    const verifiedReleases = rawReleases.filter(rel => ReleaseIdentity.matches(rel.name, request));
+    const normalized = Normalizer.normalize(verifiedReleases, request.type === 'episode' ? 1024 * 1024 : undefined);
     if (normalized.length === 0) {
       return [];
     }
 
     // Ready account files do not depend on the global cache-check endpoint.
     // Preserve them even when another provider wins hash deduplication.
-    const libraryFiles = new Map(rawReleases
+    const libraryFiles = new Map(verifiedReleases
       .filter(rel => rel.provider === 'torbox-library' && rel.libraryFiles?.length)
       .map(rel => [Normalizer.normalizeHash(rel.infoHash), rel.libraryFiles!] as const));
     const hashes = normalized.map(n => n.infoHash).filter(hash => !libraryFiles.has(hash));
@@ -117,7 +111,7 @@ export class SourceEngine {
       let fileSize = rel.sizeBytes;
 
       if (files.length > 0) {
-        const matchedFile = FileMatcher.matchFile(request, files);
+        const matchedFile = FileMatcher.matchFile(request, files, rel.name);
         if (!matchedFile) {
           // If files are listed but target episode/movie cannot be matched, skip this torrent
           continue;
@@ -125,9 +119,16 @@ export class SourceEngine {
         fileId = matchedFile.id;
         fileName = matchedFile.name;
         fileSize = matchedFile.size;
+      } else if (request.type === 'episode') {
+        const identity = FileMatcher.episodeIdentity(rel.name);
+        if (identity.season != null && identity.season !== (request.season ?? 1)
+          && !ReleaseIdentity.seasonRangeContains(rel.name, request.season ?? 1)) continue;
+        if (identity.episode != null && identity.episode !== (request.episode ?? 1)) continue;
+        if (identity.endEpisode != null && identity.endEpisode !== identity.episode) continue;
       }
 
-      const candidateId = `cand_${rel.infoHash}_${fileId}`;
+      // Cache metadata can omit file IDs; a failure of E01 must not blacklist an entire season pack.
+      const candidateId = `cand_${rel.infoHash}_${fileId}${request.type === 'episode' ? `_${encodeURIComponent(mediaKey)}` : ''}`;
 
       candidates.push({
         candidateId,
@@ -173,29 +174,31 @@ export class SourceEngine {
       throw new TorBoxError('No playable candidates found for this media.', 404);
     }
 
-    const selected = candidateId
-      ? candidates.find((c) => c.candidateId === candidateId)
-      : candidates.find((c) => c.cached) || candidates[0];
-
-    if (!selected) throw new TorBoxError('The selected version is unavailable.', 404);
-
-    if (!selected.cached) {
+    const eligible = candidateId ? candidates.filter(c => c.candidateId === candidateId) : candidates.filter(c => c.cached);
+    if (candidateId && !eligible.length) throw new TorBoxError('The selected version is unavailable.', 404);
+    if (!eligible.length || (candidateId && !eligible[0].cached)) {
       throw new TorBoxError('This torrent is not cached in TorBox yet. Choose a version to download to your TorBox library.', 409, 'TORBOX_NOT_CACHED');
     }
-
-    const stream = await this.torbox.requestDownloadLink(
-      selected.torrentHash,
-      selected.fileId,
-      apiKey,
-      request,
-      undefined,
-      false
-    );
-
-    return {
-      candidate: selected,
-      stream,
-    };
+    if (!candidateId) {
+      const hash = request.preferredTorrentHash?.toLowerCase();
+      const group = request.preferredReleaseGroup?.toLowerCase();
+      eligible.sort((a, b) => Number(b.torrentHash === hash) - Number(a.torrentHash === hash)
+        || (group ? Number(ReleaseIdentity.releaseGroup(b.rawReleaseName) === group)
+          - Number(ReleaseIdentity.releaseGroup(a.rawReleaseName) === group) : 0));
+    }
+    for (const selected of eligible) {
+      try {
+        const selectedFile = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|webm)$/i.test(selected.fileName)
+          ? { name: selected.fileName, size: selected.sizeBytes } : undefined;
+        const stream = await this.torbox.requestDownloadLink(selected.torrentHash, selected.fileId, apiKey, request, undefined, false, selectedFile);
+        return { candidate: selected, stream };
+      } catch (error) {
+        // Retry only another verified copy. Authorization, rate limits and account errors must surface.
+        if (candidateId || !(error instanceof TorBoxError) || error.statusCode !== 404) throw error;
+        CacheManager.markCandidateFailure(selected.candidateId, undefined, this.torbox.cacheScope(apiKey));
+      }
+    }
+    throw new TorBoxError('No verified playable copy of this episode is available. Choose another version.', 404);
   }
 
   public async checkProvidersHealth(apiKey?: string): Promise<{ healthy: number; degraded: number; list: ProviderHealth[] }> {

@@ -1,4 +1,6 @@
 import { MediaRequest, ProviderHealth, RawRelease } from '../types';
+import { ProviderSearch } from '../services/provider-search';
+import { QueryBuilder } from '../services/query-builder';
 import { TorrentProvider } from './provider.interface';
 
 interface BitsearchItem {
@@ -50,7 +52,7 @@ export class BitsearchProvider implements TorrentProvider {
       try {
         const url = `${mirror}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(2500),
           headers,
         });
         if (response.ok) {
@@ -69,60 +71,55 @@ export class BitsearchProvider implements TorrentProvider {
       return [];
     }
 
-    let query: string;
-    if (request.type === 'episode') {
-      const title = request.seriesTitle || request.originalTitle || request.title;
-      const s = String(request.season ?? 1).padStart(2, '0');
-      const e = String(request.episode ?? 1).padStart(2, '0');
-      query = `${title} S${s}E${e}`;
-    } else {
-      const title = request.originalTitle || request.title;
-      query = `${title} ${request.year || ''}`.trim();
-    }
+    const queries = request.type === 'episode'
+      ? QueryBuilder.getEpisodeSearchQueries(request) : [request.originalTitle || request.title, request.title].map(title => `${QueryBuilder.cleanTitle(title)} ${request.year || ""}`.trim());
 
-    const cleanQuery = query
-      .replace(/[:\/\\?*|"<>]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    if (queries.length === 0) return [];
 
-    if (!cleanQuery) return [];
+    return ProviderSearch.collect(request, queries, async rawQuery => {
+      const cleanQuery = rawQuery
+        .replace(/[:\/\\?*|"<>]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleanQuery) return [];
 
-    try {
-      const { data, mirror } = await this.fetchJson(
-        `/api/v1/search?q=${encodeURIComponent(cleanQuery)}&sort=seeders&limit=80`
-      );
+      try {
+        const { data, mirror } = await this.fetchJson(
+          `/api/v1/search?q=${encodeURIComponent(cleanQuery)}&sort=seeders&limit=80`
+        );
 
-      if (!data.success || !Array.isArray(data.results)) {
-        return [];
+        if (!data.success || !Array.isArray(data.results) || data.results.length === 0) {
+          return [];
+        }
+
+        const releases: RawRelease[] = [];
+        for (const item of data.results) {
+          if (!item || !item.title || !item.infohash) continue;
+
+          const infoHash = item.infohash.trim().toLowerCase();
+          if (!/^[a-f0-9]{40}$/.test(infoHash)) continue;
+
+          const name = item.title.trim();
+          const sizeBytes = Number(item.size);
+          const seeders = Number(item.seeders);
+
+          releases.push({
+            provider: this.id,
+            name,
+            infoHash,
+            magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(name)}`,
+            sizeBytes: Number.isSafeInteger(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0,
+            seeders: Number.isFinite(seeders) ? Math.max(0, seeders) : 0,
+            detailsUrl: `${mirror}/torrents/${item.id}`,
+          });
+        }
+
+        return releases;
+      } catch (err) {
+        console.warn(`[BitsearchProvider] Search failed for "${cleanQuery}": ${(err as Error).message}`);
       }
-
-      const releases: RawRelease[] = [];
-      for (const item of data.results) {
-        if (!item || !item.title || !item.infohash) continue;
-
-        const infoHash = item.infohash.trim().toLowerCase();
-        if (!/^[a-f0-9]{40}$/.test(infoHash)) continue;
-
-        const name = item.title.trim();
-        const sizeBytes = Number(item.size);
-        const seeders = Number(item.seeders);
-
-        releases.push({
-          provider: this.id,
-          name,
-          infoHash,
-          magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(name)}`,
-          sizeBytes: Number.isSafeInteger(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0,
-          seeders: Number.isFinite(seeders) ? Math.max(0, seeders) : 0,
-          detailsUrl: `${mirror}/torrents/${item.id}`,
-        });
-      }
-
-      return releases;
-    } catch (err) {
-      console.warn(`[BitsearchProvider] Search failed for "${cleanQuery}": ${(err as Error).message}`);
       return [];
-    }
+    });
   }
 
   public async health(): Promise<ProviderHealth> {
