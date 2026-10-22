@@ -52,7 +52,7 @@ export class BitsearchProvider implements TorrentProvider {
       try {
         const url = `${mirror}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(2500),
+          signal: AbortSignal.timeout(1200),
           headers,
         });
         if (response.ok) {

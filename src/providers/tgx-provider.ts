@@ -85,7 +85,7 @@ export class TgxProvider implements TorrentProvider {
       try {
         const url = `${mirror}${path}`;
         const response = await this.fetcher(url, {
-          signal: AbortSignal.timeout(2500),
+          signal: AbortSignal.timeout(1200),
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
           },

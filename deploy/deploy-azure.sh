@@ -72,6 +72,9 @@ fi
 if [ -n "${TORBOX_API_KEY:-}" ]; then
     DEPLOY_CMD+=(--env-vars "TORBOX_API_KEY=${TORBOX_API_KEY}")
 fi
+if [ -n "${REALDEBRID_API_KEY:-}" ]; then
+    DEPLOY_CMD+=(--env-vars "REALDEBRID_API_KEY=${REALDEBRID_API_KEY}")
+fi
 if [ -n "${PORNOLAB_COOKIE:-}" ]; then
     DEPLOY_CMD+=(--env-vars "PORNOLAB_COOKIE=${PORNOLAB_COOKIE}")
 fi

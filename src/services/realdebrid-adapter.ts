@@ -297,8 +297,8 @@ export class RealDebridAdapter implements DebridAdapter {
 
     // If magnet is actively converting metadata, poll briefly for files to become available
     if (info.status === 'magnet_conversion') {
-      for (let attempt = 0; attempt < 5 && info.status === 'magnet_conversion'; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 600));
+      for (let attempt = 0; attempt < 8 && info.status === 'magnet_conversion'; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
         info = await this.request(`torrents/info/${torrentId}`, apiKey);
       }
     }

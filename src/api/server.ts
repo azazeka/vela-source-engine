@@ -9,6 +9,7 @@ import { TpbProvider } from '../providers/tpb-provider';
 import { TorBoxLibraryProvider } from '../providers/torbox-library-provider';
 import { RealDebridLibraryProvider } from '../providers/realdebrid-library-provider';
 import { createConfiguredTorznabProviders } from '../providers/torznab-provider';
+import { TorrentioProvider } from '../providers/torrentio-provider';
 import { YtsProvider } from '../providers/yts-provider';
 import { TorrentProvider } from '../providers/provider.interface';
 import { AIService } from '../services/ai-service';
@@ -48,6 +49,7 @@ export function createApp(options: {
     ...createConfiguredTorznabProviders(),
     new RealDebridLibraryProvider(realdebridAdapter),
     new TorBoxLibraryProvider(torboxAdapter),
+    new TorrentioProvider(),
     new RutorProvider(),
     new YtsProvider(),
     new TgxProvider(),

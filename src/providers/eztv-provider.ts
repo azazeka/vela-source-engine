@@ -95,43 +95,60 @@ export class EztvProvider implements TorrentProvider {
     const episodePadded = String(targetEpisode).padStart(2, '0');
     const epPattern = new RegExp(`S${seasonPadded}E${episodePadded}|\\b${targetSeason}x${episodePadded}\\b`, 'i');
 
+    const parseTorrents = (torrents: EztvTorrent[]): RawRelease[] => {
+      const releases: RawRelease[] = [];
+      for (const item of torrents) {
+        if (!item || !item.hash || !item.title) continue;
+
+        const normalizedHash = item.hash.trim().toLowerCase();
+        if (!/^[a-f0-9]{40}$/.test(normalizedHash)) continue;
+
+        const releaseName = item.filename || item.title;
+        // Filter for specific episode if requested
+        if (!epPattern.test(releaseName)) {
+          // Check if it's explicitly matched by item properties
+          const itemS = parseInt(item.season || '0', 10);
+          const itemE = parseInt(item.episode || '0', 10);
+          if (itemS !== targetSeason || itemE !== targetEpisode) {
+            continue;
+          }
+        }
+
+        const size = typeof item.size_bytes === 'string' ? parseInt(item.size_bytes, 10) : Number(item.size_bytes);
+        const seeds = Number(item.seeds ?? 0);
+
+        releases.push({
+          provider: this.id,
+          name: releaseName.trim(),
+          infoHash: normalizedHash,
+          magnet: item.magnet_url || `magnet:?xt=urn:btih:${normalizedHash}&dn=${encodeURIComponent(releaseName.trim())}`,
+          sizeBytes: Number.isSafeInteger(size) && size > 0 ? size : 0,
+          seeders: Number.isFinite(seeds) ? Math.max(0, seeds) : 0,
+          detailsUrl: item.episode_url || null,
+        });
+      }
+      return releases;
+    };
+
+    const imdbDigits = request.imdbId?.replace(/^tt/i, '').trim();
+    if (imdbDigits && /^\d+$/.test(imdbDigits)) {
+      try {
+        const data: EztvResponse = await this.fetchJson(`/get-torrents?imdb_id=${encodeURIComponent(imdbDigits)}&limit=100`);
+        if (data && Array.isArray(data.torrents) && data.torrents.length > 0) {
+          const releases = parseTorrents(data.torrents);
+          if (releases.length > 0) return releases;
+        }
+      } catch (error) {
+        console.warn(`[EztvProvider] Search by imdb_id failed: ${(error as Error).message}`);
+      }
+    }
+
     for (const seriesTitle of titles) {
       try {
         const data: EztvResponse = await this.fetchJson(`/get-torrents?search=${encodeURIComponent(seriesTitle)}&limit=100`);
         if (!data || !Array.isArray(data.torrents) || data.torrents.length === 0) continue;
 
-        const releases: RawRelease[] = [];
-        for (const item of data.torrents) {
-          if (!item || !item.hash || !item.title) continue;
-
-          const normalizedHash = item.hash.trim().toLowerCase();
-          if (!/^[a-f0-9]{40}$/.test(normalizedHash)) continue;
-
-          const releaseName = item.filename || item.title;
-          // Filter for specific episode if requested
-          if (!epPattern.test(releaseName)) {
-            // Check if it's explicitly matched by item properties
-            const itemS = parseInt(item.season || '0', 10);
-            const itemE = parseInt(item.episode || '0', 10);
-            if (itemS !== targetSeason || itemE !== targetEpisode) {
-              continue;
-            }
-          }
-
-          const size = typeof item.size_bytes === 'string' ? parseInt(item.size_bytes, 10) : Number(item.size_bytes);
-          const seeds = Number(item.seeds ?? 0);
-
-          releases.push({
-            provider: this.id,
-            name: releaseName.trim(),
-            infoHash: normalizedHash,
-            magnet: item.magnet_url || `magnet:?xt=urn:btih:${normalizedHash}&dn=${encodeURIComponent(releaseName.trim())}`,
-            sizeBytes: Number.isSafeInteger(size) && size > 0 ? size : 0,
-            seeders: Number.isFinite(seeds) ? Math.max(0, seeds) : 0,
-            detailsUrl: item.episode_url || null,
-          });
-        }
-
+        const releases = parseTorrents(data.torrents);
         if (releases.length > 0) return releases;
       } catch (error) {
         console.warn(`[EztvProvider] Search failed for "${seriesTitle}": ${(error as Error).message}`);

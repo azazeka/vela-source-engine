@@ -3,6 +3,7 @@ export type MediaType = 'movie' | 'episode';
 export interface MediaRequest {
   type: MediaType;
   tmdbId: number;
+  imdbId?: string;
   title: string;
   originalTitle: string;
   year: number;
