@@ -101,7 +101,8 @@ export class RealDebridAdapter implements DebridAdapter {
       const detail = typeof rawError === 'string'
         ? rawError.split(token).join('[redacted]').replace(/(?:https?:\/\/|magnet:)\S+/gi, '[redacted URL]').trim()
         : `Real-Debrid returned HTTP ${response.status}.`;
-      throw failure(detail, response.status, json?.error_code ? String(json.error_code) : undefined);
+      const code = json?.error_code ? String(json.error_code) : 'REALDEBRID_REJECTED';
+      throw failure(detail, response.status, code);
     }
 
     return json;
@@ -154,8 +155,11 @@ export class RealDebridAdapter implements DebridAdapter {
         const normHash = hashKey.toLowerCase();
         if (!batch.includes(normHash)) continue;
 
-        const rdVariants = (hashData as any)?.rd;
-        if (!Array.isArray(rdVariants) || rdVariants.length === 0) continue;
+        const rdRaw = (hashData as any)?.rd;
+        const rdVariants: any[] = Array.isArray(rdRaw)
+          ? rdRaw
+          : (rdRaw && typeof rdRaw === 'object' ? [rdRaw] : []);
+        if (rdVariants.length === 0) continue;
 
         // Choose the best variant (the one with the largest total size / video files)
         let bestFiles: TorBoxFile[] = [];
@@ -291,6 +295,14 @@ export class RealDebridAdapter implements DebridAdapter {
     let info = await this.request(`torrents/info/${torrentId}`, apiKey);
     if (!info) throw new RealDebridError('Could not retrieve torrent info from Real-Debrid.', 502);
 
+    // If magnet is actively converting metadata, poll briefly for files to become available
+    if (info.status === 'magnet_conversion') {
+      for (let attempt = 0; attempt < 5 && info.status === 'magnet_conversion'; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        info = await this.request(`torrents/info/${torrentId}`, apiKey);
+      }
+    }
+
     // 4. If files need to be selected, select target file or all
     if (info.status === 'waiting_files_selection') {
       const files: TorBoxFile[] = (info.files ?? []).map((f: any) => ({
@@ -325,7 +337,7 @@ export class RealDebridAdapter implements DebridAdapter {
 
     // 5. Verify download status (poll briefly if cached torrent is converting/finalizing)
     if (info.status !== 'downloaded') {
-      for (let attempt = 0; attempt < 3 && info.status !== 'downloaded'; attempt++) {
+      for (let attempt = 0; attempt < 4 && info.status !== 'downloaded'; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 600));
         info = await this.request(`torrents/info/${torrentId}`, apiKey);
       }
