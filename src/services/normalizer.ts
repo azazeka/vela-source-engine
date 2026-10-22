@@ -21,7 +21,7 @@ export class Normalizer {
         continue;
       }
 
-      const magnet = raw.magnet && raw.magnet.startsWith('magnet:')
+      const magnet = raw.magnet && raw.magnet.startsWith('magnet:') && this.normalizeHash(raw.magnet) === cleanHash
         ? raw.magnet
         : `magnet:?xt=urn:btih:${cleanHash}&dn=${encodeURIComponent(raw.name)}`;
 

@@ -31,6 +31,7 @@ describe('SourceEngine and REST API', () => {
     assert.equal(candidates[0].provider, 'rutor');
     assert.equal(candidates[0].quality, '2160p');
     assert.equal(candidates[0].seeders, 200);
+    assert.equal(candidates[0].magnet, `magnet:?xt=urn:btih:${'a'.repeat(40)}&dn=${encodeURIComponent(releases[1].name)}`);
     assert.equal(candidates[1].fileId, 24);
     const resolved = await sourceEngine.resolvePlay(movieRequest);
     assert.equal(resolved.candidate.candidateId, candidates[0].candidateId);

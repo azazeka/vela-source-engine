@@ -184,6 +184,7 @@ export class SourceEngine {
         sizeBytes: fileSize,
         cached: isCached,
         torrentHash: rel.infoHash,
+        magnet: rel.magnet,
         fileId,
         fileName,
         provider: rel.provider,
@@ -235,19 +236,36 @@ export class SourceEngine {
         || (group ? Number(ReleaseIdentity.releaseGroup(b.rawReleaseName) === group)
           - Number(ReleaseIdentity.releaseGroup(a.rawReleaseName) === group) : 0));
     }
+    let lastError: unknown = null;
     for (const selected of eligible) {
       try {
         const selectedFile = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|webm)$/i.test(selected.fileName)
           ? { name: selected.fileName, size: selected.sizeBytes } : undefined;
-        const stream = await adapter.requestDownloadLink(selected.torrentHash, selected.fileId, apiKey, request, undefined, false, selectedFile);
+        const torrentReference = adapter.id === 'realdebrid' ? selected.magnet ?? selected.torrentHash : selected.torrentHash;
+        const stream = await adapter.requestDownloadLink(torrentReference, selected.fileId, apiKey, request, undefined, false, selectedFile);
         return { candidate: selected, stream };
       } catch (error) {
+        lastError = error;
         // Retry only another verified copy. Authorization, rate limits and account errors must surface.
-        if (candidateId || !(error instanceof DebridError) || error.statusCode !== 404) throw error;
+        // File rejections (404 not found, or 422 infringing_file / error 35) should fall back to the next candidate when auto-resolving.
+        const isFileRejection = error instanceof DebridError && (
+          error.statusCode === 404 ||
+          error.code === 'REALDEBRID_REJECTED' ||
+          error.statusCode === 422 ||
+          error.message.includes('error 35') ||
+          error.message.includes('infringing_file')
+        );
+
+        if (candidateId || !isFileRejection) throw error;
+        console.warn(`[resolvePlay] Candidate ${selected.candidateId} (${selected.rawReleaseName}) rejected with: ${(error as Error).message}. Falling back to next candidate.`);
         CacheManager.markCandidateFailure(selected.candidateId, undefined, adapter.cacheScope(apiKey));
+        CacheManager.setDebridCached(adapter.id, selected.torrentHash, null, 60 * 60 * 1000, adapter.cacheScope(apiKey));
       }
     }
-    throw new TorBoxError('No verified playable copy of this episode is available. Choose another version.', 404);
+    if (lastError instanceof DebridError && (lastError.code === 'REALDEBRID_REJECTED' || lastError.message.includes('error 35'))) {
+      throw lastError;
+    }
+    throw new TorBoxError('No verified playable copy of this media is available. Choose another version.', 404);
   }
 
   public async checkProvidersHealth(apiKey?: string): Promise<{ healthy: number; degraded: number; list: ProviderHealth[] }> {

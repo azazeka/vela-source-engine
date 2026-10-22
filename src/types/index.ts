@@ -90,6 +90,7 @@ export interface PlayCandidate {
   sizeBytes: number;
   cached: boolean;
   torrentHash: string;
+  magnet?: string;
   fileId: number;
   fileName: string;
   provider: string;

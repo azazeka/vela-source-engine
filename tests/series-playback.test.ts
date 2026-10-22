@@ -129,4 +129,67 @@ describe('verified series playback', () => {
     assert.equal(third.length, 1);
     assert.notEqual(second[0].candidateId, third[0].candidateId);
   });
+
+  it('falls back to second candidate when first candidate is rejected with Real-Debrid error 35', async () => {
+    const { RealDebridAdapter } = await import('../src/services/realdebrid-adapter');
+    const mockHash1 = 'a'.repeat(40);
+    const mockHash2 = 'b'.repeat(40);
+
+    const adapter = new RealDebridAdapter((async (url: any, init?: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/torrents/instantAvailability')) {
+        return Response.json({
+          [mockHash1]: { rd: [{ '1': { filename: 'Show.S01E02.2160p.mkv', filesize: 2000000000 } }] },
+          [mockHash2]: { rd: [{ '1': { filename: 'Show.S01E02.1080p.mkv', filesize: 1000000000 } }] },
+        });
+      }
+      if (urlStr.includes('/torrents?limit=100')) {
+        return Response.json([]);
+      }
+      if (urlStr.includes('/torrents/addMagnet')) {
+        const body = String(init?.body || '');
+        if (body.includes(mockHash1)) {
+          // Hash 1 is DMCA-blocked with error 35
+          return new Response(JSON.stringify({ error: 'infringing_file', error_code: 35 }), { status: 403 });
+        }
+        // Hash 2 succeeds
+        return Response.json({ id: 'RD_ID_2' });
+      }
+      if (urlStr.includes('/torrents/info/RD_ID_2')) {
+        return Response.json({
+          id: 'RD_ID_2',
+          hash: mockHash2,
+          filename: 'Show.S01E02.1080p.mkv',
+          bytes: 1000000000,
+          status: 'downloaded',
+          progress: 100,
+          files: [{ id: 1, path: '/Show.S01E02.1080p.mkv', bytes: 1000000000, selected: 1 }],
+          links: ['https://real-debrid.com/d/TESTLINK2'],
+        });
+      }
+      if (urlStr.includes('/unrestrict/link')) {
+        return Response.json({
+          download: 'https://download.real-debrid.com/Show.S01E02.1080p.mkv',
+          filename: 'Show.S01E02.1080p.mkv',
+          filesize: 1000000000,
+        });
+      }
+      return Response.json({});
+    }) as typeof fetch, undefined, 'test_token');
+
+    const engine = new SourceEngine(undefined as any, adapter);
+    engine.registerProvider({
+      id: 'mock',
+      name: 'Mock',
+      search: async () => [
+        { provider: 'mock', name: 'Show.S01E02.2160p', infoHash: mockHash1, sizeBytes: 2000000000, seeders: 100 },
+        { provider: 'mock', name: 'Show.S01E02.1080p', infoHash: mockHash2, sizeBytes: 1000000000, seeders: 80 },
+      ],
+      health: async () => ({ id: 'mock', healthy: true, latencyMs: 0 }),
+    });
+
+    const result = await engine.resolvePlay(request, undefined, 'best', 'test_token', 'realdebrid');
+    assert.equal(result.candidate.torrentHash, mockHash2);
+    assert.equal(result.stream.streamUrl, 'https://download.real-debrid.com/Show.S01E02.1080p.mkv');
+  });
 });

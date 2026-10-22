@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { MediaRequest, StreamDescriptor, TorBoxCachedTorrent, TorBoxFile } from '../types';
 import { DebridAdapter, DebridDiagnostic, DebridError } from './debrid-adapter.interface';
 import { FileMatcher } from './file-matcher';
+import { Normalizer } from './normalizer';
 import { LibraryTorrent, retryAfterSeconds } from './torbox-adapter';
 
 export class RealDebridError extends DebridError {
@@ -76,10 +77,6 @@ export class RealDebridAdapter implements DebridAdapter {
       throw failure('Real-Debrid connection failed. Check your network and try again.', 502, undefined, 'transport');
     }
 
-    if ([401, 403].includes(response.status)) {
-      throw failure(`Real-Debrid returned HTTP ${response.status}. Check your API key and account access.`, 401);
-    }
-
     if (response.status === 204) {
       return null;
     }
@@ -88,6 +85,9 @@ export class RealDebridAdapter implements DebridAdapter {
     try {
       json = await response.json();
     } catch {
+      if ([401, 403].includes(response.status)) {
+        throw failure('Real-Debrid API key is invalid or account access is denied.', 401);
+      }
       throw failure(
         response.ok ? 'Invalid Real-Debrid response.' : `Real-Debrid returned HTTP ${response.status}.`,
         response.ok ? 502 : response.status,
@@ -97,11 +97,18 @@ export class RealDebridAdapter implements DebridAdapter {
     }
 
     if (!response.ok) {
+      if (Number(json?.error_code) === 35 || json?.error === 'infringing_file') {
+        throw failure('Real-Debrid blocked this torrent (infringing_file, error 35). This is a restriction on this file, not an API key error.', 422, 'REALDEBRID_REJECTED');
+      }
+      if ([401, 403].includes(response.status)) {
+        throw failure('Real-Debrid API key is invalid or account access is denied.', 401);
+      }
+      if (path.startsWith('torrents/selectFiles/') && Number(json?.error_code) === 31) return null;
       const rawError = typeof json?.error === 'string' ? json.error : json?.message;
       const detail = typeof rawError === 'string'
         ? rawError.split(token).join('[redacted]').replace(/(?:https?:\/\/|magnet:)\S+/gi, '[redacted URL]').trim()
         : `Real-Debrid returned HTTP ${response.status}.`;
-      const code = json?.error_code ? String(json.error_code) : 'REALDEBRID_REJECTED';
+      const code = 'REALDEBRID_REJECTED';
       throw failure(detail, response.status, code);
     }
 
@@ -111,7 +118,7 @@ export class RealDebridAdapter implements DebridAdapter {
   public async health(apiKey?: string): Promise<'ok' | 'degraded' | 'unauthorized' | 'down'> {
     try {
       const user = await this.request('user', apiKey);
-      if (user && (user.type === 'premium' || (typeof user.premium === 'number' && user.premium > 0))) {
+      if (user && (user.type === 'premium' && typeof user.premium === 'number' && user.premium > 0)) {
         return 'ok';
       }
       return 'degraded';
@@ -213,7 +220,7 @@ export class RealDebridAdapter implements DebridAdapter {
       const hash = typeof row.hash === 'string' ? row.hash.toLowerCase() : '';
       if (!hash || !id) continue;
 
-      const ready = row.status === 'downloaded' || row.status === 'uploading' || row.progress === 100;
+      const ready = row.status === 'downloaded';
       torrents.push({
         id: id as any,
         hash,
@@ -233,9 +240,9 @@ export class RealDebridAdapter implements DebridAdapter {
       if (!data || typeof data !== 'object') return null;
 
       const hash = typeof data.hash === 'string' ? data.hash.toLowerCase() : '';
-      const ready = data.status === 'downloaded' || data.status === 'uploading' || data.progress === 100;
+      const ready = data.status === 'downloaded';
       const files: TorBoxFile[] = Array.isArray(data.files)
-        ? data.files.map((f: any) => ({
+        ? data.files.filter((f: any) => Number(f.selected) === 1).map((f: any) => ({
             id: Number(f.id) || 0,
             name: (f.path ?? '').replace(/^\//, '') || `file_${f.id}`,
             size: Number(f.bytes) || 0,
@@ -265,7 +272,14 @@ export class RealDebridAdapter implements DebridAdapter {
     allowUncached: boolean = true,
     selectedFile?: { name: string; size: number }
   ): Promise<StreamDescriptor> {
-    const normHash = torrentHash.toLowerCase().trim();
+    const reference = torrentHash.trim();
+    const normHash = Normalizer.normalizeHash(reference);
+    if (!normHash) throw new RealDebridError('Invalid torrent hash or magnet link.', 400, 'REALDEBRID_REJECTED');
+    // Preserve source metadata. Real-Debrid may reject a bare hash-only magnet
+    // even when the corresponding full magnet / torrent file is accepted.
+    const name = selectedFile?.name || request?.title;
+    const magnet = reference.toLowerCase().startsWith('magnet:') ? reference
+      : `magnet:?xt=urn:btih:${normHash}${name ? `&dn=${encodeURIComponent(name)}` : ''}`;
 
     // 1. Check if user already has this torrent in their RD list
     const torrents = await this.listTorrents(apiKey);
@@ -277,7 +291,7 @@ export class RealDebridAdapter implements DebridAdapter {
     } else {
       // 2. Add magnet to user's RD account
       const form = new URLSearchParams();
-      form.set('magnet', `magnet:?xt=urn:btih:${normHash}`);
+      form.set('magnet', magnet);
 
       const addRes = await this.request('torrents/addMagnet', apiKey, undefined, {
         method: 'POST',
@@ -291,15 +305,23 @@ export class RealDebridAdapter implements DebridAdapter {
       torrentId = String(addRes.id);
     }
 
+    const checkTorrentStatus = (info: any) => {
+      if (['magnet_error', 'error', 'virus', 'dead'].includes(info?.status)) {
+        throw new RealDebridError(`Real-Debrid could not download this torrent (${info.status}).`, 422, 'REALDEBRID_REJECTED');
+      }
+    };
+
     // 3. Get detailed torrent info (files & status)
     let info = await this.request(`torrents/info/${torrentId}`, apiKey);
     if (!info) throw new RealDebridError('Could not retrieve torrent info from Real-Debrid.', 502);
+    checkTorrentStatus(info);
 
     // If magnet is actively converting metadata, poll briefly for files to become available
     if (info.status === 'magnet_conversion') {
       for (let attempt = 0; attempt < 8 && info.status === 'magnet_conversion'; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 750));
         info = await this.request(`torrents/info/${torrentId}`, apiKey);
+        checkTorrentStatus(info);
       }
     }
 
@@ -333,6 +355,7 @@ export class RealDebridAdapter implements DebridAdapter {
 
       // Refresh info after selecting files
       info = await this.request(`torrents/info/${torrentId}`, apiKey);
+      checkTorrentStatus(info);
     }
 
     // 5. Verify download status (poll briefly if cached torrent is converting/finalizing)
@@ -340,6 +363,7 @@ export class RealDebridAdapter implements DebridAdapter {
       for (let attempt = 0; attempt < 4 && info.status !== 'downloaded'; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 600));
         info = await this.request(`torrents/info/${torrentId}`, apiKey);
+        checkTorrentStatus(info);
       }
     }
 

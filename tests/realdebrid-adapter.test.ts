@@ -70,6 +70,36 @@ describe('RealDebridAdapter unit tests', () => {
     assert.equal(cached.files[0].name, 'Movie.2024.2160p.mkv');
   });
 
+  it('health reports degraded for free or expired accounts', async () => {
+    for (const user of [{ type: 'free', premium: 0 }, { type: 'premium', premium: 0 }]) {
+      const adapter = new RealDebridAdapter((async () => new Response(JSON.stringify(user))) as typeof fetch);
+      assert.equal(await adapter.health('token'), 'degraded');
+    }
+  });
+
+  it('preserves infringing_file as a file rejection, including HTTP 403', async () => {
+    for (const status of [400, 403, 451, 503]) {
+      const paths: string[] = [];
+      const adapter = new RealDebridAdapter((async (url: string | URL, init?: RequestInit) => {
+        const path = new URL(url).pathname;
+        paths.push(path);
+        assert.equal(init?.headers && (init.headers as Record<string, string>).Authorization, 'Bearer token');
+        if (path.endsWith('/torrents')) return new Response('[]');
+        assert.ok(path.endsWith('/torrents/addMagnet'));
+        assert.equal(init?.method, 'POST');
+        assert.equal(new URLSearchParams(String(init?.body)).get('magnet'), `magnet:?xt=urn:btih:${'a'.repeat(40)}`);
+        return new Response(JSON.stringify({ error: 'infringing_file', error_code: 35 }), { status });
+      }) as typeof fetch);
+      await assert.rejects(adapter.requestDownloadLink('a'.repeat(40), 0, 'token'), (error: any) => {
+        assert.equal(error.statusCode, 422);
+        assert.equal(error.code, 'REALDEBRID_REJECTED');
+        assert.match(error.message, /restriction on this file/);
+        return true;
+      });
+      assert.equal(paths.length, 2);
+    }
+  });
+
   it('requestDownloadLink unrestricts link when torrent is cached', async () => {
     const mockHash = 'cccccccccccccccccccccccccccccccccccccccc';
 
@@ -132,6 +162,30 @@ describe('RealDebridAdapter unit tests', () => {
     assert.equal(stream.fileName, 'Gladiator.II.2024.2160p.mkv');
     assert.equal(stream.sizeBytes, 14000000000);
     assert.equal(stream.mimeType, 'video/x-matroska');
+  });
+
+  it('preserves the full source magnet when adding a torrent', async () => {
+    const hash = 'a'.repeat(40);
+    const magnet = `magnet:?xt=urn:btih:${hash}&dn=Control%20Film&tr=https%3A%2F%2Ftracker.example%2Fannounce`;
+    let added = false;
+    const adapter = new RealDebridAdapter((async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/torrents')) return new Response('[]');
+      if (path.endsWith('/addMagnet')) {
+        assert.equal(new URLSearchParams(String(init?.body)).get('magnet'), magnet);
+        added = true;
+        return new Response(JSON.stringify({ id: 'CONTROL' }), { status: 201 });
+      }
+      if (path.endsWith('/info/CONTROL')) return new Response(JSON.stringify({
+        hash, filename: 'Control Film.mkv', status: 'downloaded',
+        files: [{ id: 1, path: '/Control Film.mkv', selected: 1, bytes: 1000 }], links: ['https://rd.test/control'],
+      }));
+      if (path.endsWith('/unrestrict/link')) return new Response(JSON.stringify({ download: 'https://cdn.test/control.mkv' }));
+      throw new Error('Unexpected endpoint');
+    }) as typeof fetch);
+    const stream = await adapter.requestDownloadLink(magnet, 1, 'token');
+    assert.equal(added, true);
+    assert.equal(stream.streamUrl, 'https://cdn.test/control.mkv');
   });
 
   it('requestDownloadLink throws 409 when torrent is not cached and allowUncached=false', async () => {
