@@ -39,6 +39,12 @@ test('profile routes require explicit credentials and preserve removals', async 
     await fetch(url, { method: 'PUT', headers, body: JSON.stringify({ ...profile, updatedAt: 300000, watchlist: [] }) });
     assert.deepEqual((await (await fetch(url, { headers })).json() as any).profile.watchlist, []);
     assert.equal((await fetch(url, { method: 'PUT', headers, body: '{}' })).status, 400);
+    const guardedHeaders = { ...headers, 'x-profile-base-updated-at': '100000' };
+    assert.equal((await fetch(url, { method: 'PUT', headers: guardedHeaders, body: JSON.stringify({ ...profile, updatedAt: 400000 }) })).status, 409);
+    assert.equal((await (await fetch(url, { headers })).json() as any).profile.updatedAt, 300000);
+    guardedHeaders['x-profile-base-updated-at'] = '300000';
+    assert.equal((await fetch(url, { method: 'PUT', headers: guardedHeaders, body: JSON.stringify({ ...profile, updatedAt: 400000 }) })).status, 200);
+
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
@@ -53,4 +59,19 @@ test('fresh availability discovery bypasses stale versions without starting play
   const candidates = await sourceEngine.searchCandidates(movieRequest, 'best', undefined, true);
   assert.deepEqual(candidates, []);
   assert.deepEqual(CacheManager.getCandidates(sourceEngine.getMediaKey(movieRequest), scope), []);
+});
+
+test('concurrent clients cannot overwrite changes from the same loaded revision', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vela-profile-conflict-'));
+  try {
+    const store = new TasteProfileStore(directory);
+    await store.save('a'.repeat(64), profile, 0);
+    const attempts = await Promise.allSettled([
+      store.save('a'.repeat(64), { ...profile, updatedAt: 200000 }, profile.updatedAt),
+      store.save('a'.repeat(64), { ...profile, updatedAt: 300000, watchlist: [] }, profile.updatedAt)
+    ]);
+    assert.equal(attempts.filter(value => value.status === 'fulfilled').length, 1);
+    assert.equal(attempts.filter(value => value.status === 'rejected').length, 1);
+    assert.equal((await store.load('a'.repeat(64)))?.updatedAt, 200000);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

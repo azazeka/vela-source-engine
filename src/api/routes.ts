@@ -1,5 +1,5 @@
 import { createTasteProfileRepository } from '../services/cosmos-taste-profile-store';
-import { validateTasteProfile } from '../services/taste-profile-store';
+import { validateTasteProfile, TasteProfileConflict } from '../services/taste-profile-store';
 import { Router, Request, Response } from 'express';
 import { AIService } from '../services/ai-service';
 import { CacheManager } from '../services/cache-manager';
@@ -180,8 +180,16 @@ export function createRouter(
     let profile;
     try { profile = validateTasteProfile(req.body); }
     catch { res.status(400).json({ error: 'Invalid taste profile.' }); return; }
-    try { res.json({ profile: await tasteProfiles.save(getDebridAdapter(req).cacheScope(getApiKey(req)), profile) }); }
-    catch { res.status(503).json({ error: 'Could not save your profile. Your local copy is still available.' }); }
+    const revision = req.header('x-profile-base-updated-at');
+    const expected = revision === undefined ? undefined : Number(revision);
+    if (revision !== undefined && (revision.trim() === '' || !Number.isFinite(expected) || expected! < 0)) {
+      res.status(400).json({ error: 'Invalid profile revision.' }); return;
+    }
+    try { res.json({ profile: await tasteProfiles.save(getDebridAdapter(req).cacheScope(getApiKey(req)), profile, expected) }); }
+    catch (error) {
+      if (error instanceof TasteProfileConflict) { res.status(409).json({ error: 'Profile changed. Reload and merge before saving.' }); return; }
+      res.status(503).json({ error: 'Could not save your profile. Your local copy is still available.' });
+    }
   });
 
   // 3. POST /sources/prefetch (Section 04 & 14: background prefetch when user opens movie details)

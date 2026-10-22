@@ -42,10 +42,9 @@ export class SourceEngine {
   }
 
   public getMediaKey(request: MediaRequest, debridProvider: string = 'torbox'): string {
-    const base = request.type === 'movie'
+    return request.type === 'movie'
       ? `movie:${request.tmdbId}`
       : `episode:${request.tmdbId}:${request.season ?? 1}:${request.episode ?? 1}`;
-    return debridProvider === 'realdebrid' ? `${base}:rd` : base;
   }
 
   public async searchCandidates(
@@ -67,10 +66,14 @@ export class SourceEngine {
 
     if (fresh) CacheManager.setCandidates(mediaKey, [], undefined, scope);
 
-    // Provider fan-out with bounded searches; account pagination may take longer than a single request.
+    // Provider fan-out with bounded searches; filter library providers according to active debrid adapter
     const rawReleases: RawRelease[] = [];
     const providerErrors: unknown[] = [];
-    const targetProviders = this.providers;
+    const targetProviders = this.providers.filter(p => {
+      if (p.id === 'torbox-library' && adapter.id !== 'torbox') return false;
+      if (p.id === 'realdebrid-library' && adapter.id !== 'realdebrid') return false;
+      return true;
+    });
 
     const searchPromises = targetProviders.map(async (provider) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -101,7 +104,7 @@ export class SourceEngine {
     // Ready account files do not depend on the global cache-check endpoint.
     // Preserve them even when another provider wins hash deduplication.
     const libraryFiles = new Map(verifiedReleases
-      .filter(rel => rel.provider === 'torbox-library' && rel.libraryFiles?.length)
+      .filter(rel => (rel.provider === 'torbox-library' || rel.provider === 'realdebrid-library') && rel.libraryFiles?.length)
       .map(rel => [Normalizer.normalizeHash(rel.infoHash), rel.libraryFiles!] as const));
     const hashes = normalized.map(n => n.infoHash).filter(hash => !libraryFiles.has(hash));
     let cachedTorrents = new Map<string, TorBoxCachedTorrent>();
@@ -131,8 +134,8 @@ export class SourceEngine {
             }
           }
         } catch (error) {
-          if (libraryFiles.size === 0 || (error instanceof DebridError && error.statusCode === 401)) throw error;
-          console.warn(`${adapter.id} cache check failed; using ready library files.`);
+          if (error instanceof DebridError && error.statusCode === 401) throw error;
+          console.warn(`${adapter.id} cache check failed; continuing with raw releases.`);
         }
       }
     }
@@ -142,7 +145,7 @@ export class SourceEngine {
 
     for (const rel of normalized) {
       const cachedTorrent = cachedTorrents.get(rel.infoHash);
-      const isCached = libraryFiles.has(rel.infoHash) || rel.provider === 'torbox-library' || !!cachedTorrent;
+      const isCached = libraryFiles.has(rel.infoHash) || rel.provider === 'torbox-library' || rel.provider === 'realdebrid-library' || !!cachedTorrent;
       const files = libraryFiles.get(rel.infoHash) ?? cachedTorrent?.files ?? [];
 
       let fileId = 0;

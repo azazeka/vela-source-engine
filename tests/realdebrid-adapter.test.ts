@@ -175,4 +175,41 @@ describe('RealDebridAdapter unit tests', () => {
       }
     );
   });
+
+  it('RealDebridLibraryProvider returns ready releases for matching media', async () => {
+    const mockHash = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const mockFetch = async (url: string | URL) => {
+      const urlStr = url.toString();
+      if (urlStr.includes('/torrents?limit=100')) {
+        return new Response(JSON.stringify([{
+          id: 'RD_LIB_1',
+          hash: mockHash,
+          filename: 'Inception.2010.2160p.UHD.mkv',
+          bytes: 25000000000,
+          status: 'downloaded',
+          progress: 100,
+        }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (urlStr.includes('/torrents/info/RD_LIB_1')) {
+        return new Response(JSON.stringify({
+          id: 'RD_LIB_1',
+          hash: mockHash,
+          filename: 'Inception.2010.2160p.UHD.mkv',
+          status: 'downloaded',
+          bytes: 25000000000,
+          files: [{ id: 1, path: '/Inception.2010.2160p.UHD.mkv', bytes: 25000000000, selected: 1 }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    const { RealDebridLibraryProvider } = await import('../src/providers/realdebrid-library-provider');
+    const adapter = new RealDebridAdapter(mockFetch as any);
+    const provider = new RealDebridLibraryProvider(adapter);
+    const results = await provider.search({ type: 'movie', tmdbId: 27205, title: 'Inception', originalTitle: 'Inception', year: 2010 }, 'token');
+    assert.equal(results.length, 1);
+    assert.equal(results[0].provider, 'realdebrid-library');
+    assert.equal(results[0].infoHash, mockHash);
+    assert.equal(results[0].sizeBytes, 25000000000);
+  });
 });

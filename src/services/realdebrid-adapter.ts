@@ -133,9 +133,17 @@ export class RealDebridAdapter implements DebridAdapter {
 
     const responses = await Promise.all(
       batches.map(async (batch) => {
-        const path = `torrents/instantAvailability/${batch.join('/')}`;
-        const data = await this.request(path, apiKey);
-        return { batch, data };
+        try {
+          const path = `torrents/instantAvailability/${batch.join('/')}`;
+          const data = await this.request(path, apiKey);
+          return { batch, data };
+        } catch (err: any) {
+          if (err instanceof RealDebridError && err.statusCode === 401) {
+            throw err;
+          }
+          console.warn(`[RealDebrid] Batch instantAvailability check failed:`, err?.message ?? err);
+          return { batch, data: null };
+        }
       })
     );
 
@@ -315,7 +323,14 @@ export class RealDebridAdapter implements DebridAdapter {
       info = await this.request(`torrents/info/${torrentId}`, apiKey);
     }
 
-    // 5. Verify download status
+    // 5. Verify download status (poll briefly if cached torrent is converting/finalizing)
+    if (info.status !== 'downloaded') {
+      for (let attempt = 0; attempt < 3 && info.status !== 'downloaded'; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        info = await this.request(`torrents/info/${torrentId}`, apiKey);
+      }
+    }
+
     if (info.status !== 'downloaded') {
       if (!allowUncached) {
         throw new RealDebridError(

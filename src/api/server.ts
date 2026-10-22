@@ -7,6 +7,7 @@ import { RutorProvider } from '../providers/rutor-provider';
 import { TgxProvider } from '../providers/tgx-provider';
 import { TpbProvider } from '../providers/tpb-provider';
 import { TorBoxLibraryProvider } from '../providers/torbox-library-provider';
+import { RealDebridLibraryProvider } from '../providers/realdebrid-library-provider';
 import { createConfiguredTorznabProviders } from '../providers/torznab-provider';
 import { YtsProvider } from '../providers/yts-provider';
 import { TorrentProvider } from '../providers/provider.interface';
@@ -45,6 +46,7 @@ export function createApp(options: {
   // Register built-in / default providers
   const defaultProviders: TorrentProvider[] = [
     ...createConfiguredTorznabProviders(),
+    new RealDebridLibraryProvider(realdebridAdapter),
     new TorBoxLibraryProvider(torboxAdapter),
     new RutorProvider(),
     new YtsProvider(),

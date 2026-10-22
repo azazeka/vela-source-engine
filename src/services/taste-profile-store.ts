@@ -11,6 +11,14 @@ export interface TasteProfile {
   updatedAt: number;
 }
 
+export class TasteProfileConflict extends Error {}
+
+export function assertProfileRevision(existing: TasteProfile | null | undefined, expectedUpdatedAt?: number): void {
+  if (expectedUpdatedAt !== undefined && Math.abs((existing?.updatedAt ?? 0) - expectedUpdatedAt) > 0.01) {
+    throw new TasteProfileConflict('Profile changed since it was loaded');
+  }
+}
+
 // Store only catalog data, never credentials or playback URLs.
 export function validateTasteProfile(value: any): TasteProfile {
   if (!value || typeof value !== 'object' || !Array.isArray(value.watchlist) || !Array.isArray(value.history)
@@ -22,7 +30,7 @@ export function validateTasteProfile(value: any): TasteProfile {
   const item = (input: any): Record<string, unknown> => {
     if (!input || !Number.isInteger(input.id) || input.id <= 0 || !['movie', 'tv'].includes(input.mediaType)
         || typeof input.title !== 'string' || input.title.length > 500) throw new Error('Invalid catalog item');
-    const allowed = ['id', 'mediaType', 'title', 'originalTitle', 'overview', 'posterPath', 'backdropPath', 'releaseYear', 'voteAverage', 'genreIds', 'originalLanguage', 'originCountry'];
+    const allowed = ['id', 'mediaType', 'title', 'originalTitle', 'overview', 'posterPath', 'backdropPath', 'releaseYear', 'voteAverage', 'genreIds', 'imdbId', 'originalLanguage', 'originCountry'];
     return Object.fromEntries(allowed.filter(key => input[key] !== undefined).map(key => [key, input[key]]));
   };
   const feedback = Object.fromEntries(Object.entries(value.feedback).map(([key, raw]: [string, any]) => {
@@ -34,7 +42,7 @@ export function validateTasteProfile(value: any): TasteProfile {
     if (!raw || !Number.isInteger(raw.tmdbId) || raw.tmdbId <= 0 || !['movie', 'tv'].includes(raw.mediaType)
         || typeof raw.title !== 'string' || !Number.isFinite(raw.position) || !Number.isFinite(raw.duration)
         || typeof raw.updatedAt !== 'number' || !Number.isFinite(raw.updatedAt)) throw new Error('Invalid viewing history');
-    return Object.fromEntries(['tmdbId', 'mediaType', 'season', 'episode', 'title', 'posterPath', 'position', 'duration', 'updatedAt']
+    return Object.fromEntries(['tmdbId', 'mediaType', 'season', 'episode', 'title', 'posterPath', 'backdropPath', 'position', 'duration', 'updatedAt']
       .filter(key => raw[key] !== undefined).map(key => [key, raw[key]]));
   });
   return { feedback, watchlist: value.watchlist.map(item), history, moviesOnly: value.moviesOnly, hideWatched: value.hideWatched, excludeAnime: value.excludeAnime ?? true, updatedAt: value.updatedAt };
@@ -51,10 +59,11 @@ export class TasteProfileStore {
     try { return validateTasteProfile(JSON.parse(await readFile(this.path(scope), 'utf8'))); }
     catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
   }
-  async save(scope: string, profile: TasteProfile): Promise<TasteProfile> {
+  async save(scope: string, profile: TasteProfile, expectedUpdatedAt?: number): Promise<TasteProfile> {
     const validated = validateTasteProfile(profile);
     const operation = this.writes.catch(() => {}).then(async () => {
       const existing = await this.load(scope);
+      assertProfileRevision(existing, expectedUpdatedAt);
       if (existing && existing.updatedAt > validated.updatedAt) return existing;
       await mkdir(this.directory, { recursive: true });
       const path = this.path(scope);

@@ -40,15 +40,25 @@ export class ReleaseIdentity {
     const aliases = [...new Set([request.title, request.originalTitle, request.seriesTitle]
       .filter((v): v is string => !!v?.trim()).map(this.normalize))];
     const clean = name.replace(/^(?:\s*\[[^\]]+\]\s*)+/, '').replace(/_/g, ' ');
-    const value = this.normalize(clean.replace(/\.(mkv|mp4|m4v|avi|mov|webm|ts)$/i, ''));
+    const parts = clean.split(/\s*[\/|\\]\s*/);
+    const candidatesToTest = [clean];
+    for (let i = 0; i < parts.length; i++) {
+      candidatesToTest.push(parts[i]);
+      if (i < parts.length - 1) {
+        candidatesToTest.push(parts.slice(i).join(' '));
+      }
+    }
     const titles = [...aliases, ...aliases.flatMap(a => aliases.filter(b => a !== b).map(b => `${a} ${b}`))];
-    return titles.some(title => {
-      if (value === title) return true;
-      if (!value.startsWith(title + ' ')) return false;
-      const suffix = value.slice(title.length + 1);
-      if (!/^(?:s\d{1,2}(?:e\d+)?|\d{1,2}x\d+|e\d+|ep\d+|seasons? \d+|сезоны? \d+|\d+(?: \d+)? сезоны?|complete(?: series)?|all seasons|collection|полный сериал|все сезоны|(?:19|20)\d{2}|2160p|1080[pi]|720p|480p|uhd|bluray|blu ray|web dl|webrip|hdtv)(?: |$)/iu.test(suffix)) return false;
-      const year = /^(19\d{2}|20\d{2})(?: |$)/.exec(suffix);
-      return !request.year || !year || Number(year[1]) === request.year;
+    return candidatesToTest.some(candidateStr => {
+      const value = this.normalize(candidateStr.replace(/\.(mkv|mp4|m4v|avi|mov|webm|ts)$/i, ''));
+      return titles.some(title => {
+        if (value === title) return true;
+        if (!value.startsWith(title + ' ')) return false;
+        const suffix = value.slice(title.length + 1);
+        if (!/^(?:s\d{1,2}(?:e\d+)?|\d{1,2}x\d+|e\d+|ep\d+|seasons? \d+|сезоны? \d+|\d+(?: \d+)? сезоны?|complete(?: series)?|all seasons|collection|полный сериал|все сезоны|(?:19|20)\d{2}|2160p|1080[pi]|720p|480p|uhd|bluray|blu ray|web dl|webrip|hdtv)(?: |$)/iu.test(suffix)) return false;
+        const year = /^(19\d{2}|20\d{2})(?: |$)/.exec(suffix);
+        return !request.year || !year || Number(year[1]) === request.year;
+      });
     });
   }
 

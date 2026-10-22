@@ -1,10 +1,10 @@
 import { Container, CosmosClient } from '@azure/cosmos';
 import { ManagedIdentityCredential } from '@azure/identity';
-import { TasteProfile, TasteProfileStore, validateTasteProfile } from './taste-profile-store';
+import { TasteProfile, TasteProfileStore, validateTasteProfile, assertProfileRevision } from './taste-profile-store';
 
 export interface TasteProfileRepository {
   load(scope: string): Promise<TasteProfile | null>;
-  save(scope: string, profile: TasteProfile): Promise<TasteProfile>;
+  save(scope: string, profile: TasteProfile, expectedUpdatedAt?: number): Promise<TasteProfile>;
 }
 interface ProfileDocument { id: string; accountScope: string; profile: TasteProfile; _etag?: string }
 
@@ -20,7 +20,7 @@ export class CosmosTasteProfileStore implements TasteProfileRepository {
       return resource ? validateTasteProfile(resource.profile) : null;
     } catch (error: any) { if (error.code === 404) return null; throw error; }
   }
-  async save(scope: string, profile: TasteProfile): Promise<TasteProfile> {
+  async save(scope: string, profile: TasteProfile, expectedUpdatedAt?: number): Promise<TasteProfile> {
     this.assertScope(scope);
     const validated = validateTasteProfile(profile);
     // Optimistic concurrency protects newer profiles even across server replicas.
@@ -29,6 +29,7 @@ export class CosmosTasteProfileStore implements TasteProfileRepository {
       let existing: ProfileDocument | undefined;
       try { existing = (await item.read<ProfileDocument>()).resource; }
       catch (error: any) { if (error.code !== 404) throw error; }
+      assertProfileRevision(existing?.profile, expectedUpdatedAt);
       if (existing && existing.profile.updatedAt > validated.updatedAt) return validateTasteProfile(existing.profile);
       const document: ProfileDocument = { id: scope, accountScope: scope, profile: validated };
       try {

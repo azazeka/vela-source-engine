@@ -52,7 +52,14 @@ export class RankingEngine {
       }
 
       if (b.score !== a.score) return b.score - a.score;
-      // Reuse the account copy only when the release merits are equal.
+      // Reuse the account copy with priority to Real-Debrid, then TorBox
+      const isBLibrary = b.provider === 'realdebrid-library' || b.provider === 'torbox-library';
+      const isALibrary = a.provider === 'realdebrid-library' || a.provider === 'torbox-library';
+      if (Number(isBLibrary) !== Number(isALibrary)) {
+        return Number(isBLibrary) - Number(isALibrary);
+      }
+      const rdPreference = Number(b.provider === 'realdebrid-library') - Number(a.provider === 'realdebrid-library');
+      if (rdPreference) return rdPreference;
       const libraryPreference = Number(b.provider === 'torbox-library') - Number(a.provider === 'torbox-library');
       return libraryPreference || a.candidateId.localeCompare(b.candidateId);
     });
