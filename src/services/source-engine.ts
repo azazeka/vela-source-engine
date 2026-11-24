@@ -61,7 +61,7 @@ export class SourceEngine {
     // 1. Check cache first
     const cached = CacheManager.getCandidates(mediaKey, scope);
     if (!fresh && cached && cached.length > 0) {
-      return RankingEngine.rank(cached.filter(candidate => ReleaseIdentity.matches(candidate.rawReleaseName, request)), preset);
+      return RankingEngine.rank(cached.filter(candidate => ReleaseIdentity.matches(candidate.rawReleaseName, request)), preset, request.preferredLanguages);
     }
 
     if (fresh) CacheManager.setCandidates(mediaKey, [], undefined, scope);
@@ -92,7 +92,9 @@ export class SourceEngine {
     });
 
     await Promise.all(searchPromises);
-    if (rawReleases.length === 0 && providerErrors.length > 0) throw providerErrors[0];
+    if (rawReleases.length === 0 && targetProviders.length > 0 && providerErrors.length === targetProviders.length) {
+      throw providerErrors[0];
+    }
 
     // 4. Normalizer & Deduplicator
     const verifiedReleases = rawReleases.filter(rel => ReleaseIdentity.matches(rel.name, request));
@@ -180,6 +182,8 @@ export class SourceEngine {
         videoCodec: rel.parsed.videoCodec,
         audio: rel.parsed.audio,
         channels: rel.parsed.channels,
+        languages: rel.parsed.languages,
+        audioStudios: rel.parsed.audioStudios,
         source: `${rel.parsed.source}_${rel.parsed.releaseType}`,
         sizeBytes: fileSize,
         cached: isCached,
@@ -196,7 +200,7 @@ export class SourceEngine {
     }
 
     // 7. Ranking
-    const ranked = RankingEngine.rank(candidates.filter(candidate => !CacheManager.isFailed(candidate.candidateId, scope)), preset);
+    const ranked = RankingEngine.rank(candidates.filter(candidate => !CacheManager.isFailed(candidate.candidateId, scope)), preset, request.preferredLanguages);
 
     // 8. Save in cache
     if (ranked.length > 0) {
@@ -247,10 +251,12 @@ export class SourceEngine {
       } catch (error) {
         lastError = error;
         // Retry only another verified copy. Authorization, rate limits and account errors must surface.
-        // File rejections (404 not found, or 422 infringing_file / error 35) should fall back to the next candidate when auto-resolving.
+        // File rejections (404 not found, 409 downloading/preparing, or 422 infringing_file / error 35) should fall back to the next candidate when auto-resolving.
         const isFileRejection = error instanceof DebridError && (
           error.statusCode === 404 ||
+          error.statusCode === 409 ||
           error.code === 'REALDEBRID_REJECTED' ||
+          error.code === 'TORBOX_PREPARING' ||
           error.statusCode === 422 ||
           error.message.includes('error 35') ||
           error.message.includes('infringing_file')

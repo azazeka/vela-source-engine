@@ -44,6 +44,7 @@ export interface ParsedReleaseInfo {
   audio: AudioFormat[];
   channels: string | null;
   languages: string[];
+  audioStudios?: string[];
   year: number | null;
   season: number | null;
   episode: number | null;
@@ -86,6 +87,8 @@ export interface PlayCandidate {
   videoCodec: VideoCodec;
   audio: AudioFormat[];
   channels: string | null;
+  languages?: string[];
+  audioStudios?: string[];
   source: string;
   sizeBytes: number;
   cached: boolean;

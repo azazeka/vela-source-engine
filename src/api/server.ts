@@ -66,5 +66,14 @@ export function createApp(options: {
   app.use('/api', router);
   app.use('/', router); // Also serve directly at root for convenience
 
+  // Return clean JSON error responses for malformed JSON bodies
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof SyntaxError && 'status' in err && (err as any).status === 400 && 'body' in err) {
+      res.status(400).json({ error: 'Malformed JSON payload' });
+      return;
+    }
+    next(err);
+  });
+
   return { app, sourceEngine, torboxAdapter, realdebridAdapter, aiService, trailerResolver };
 }

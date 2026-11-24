@@ -198,10 +198,13 @@ CRITICAL: Do NOT recommend any anime, donghua, aeni, manga/manhwa adaptations, o
 
     try {
       const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         signal: controller.signal,
         body: JSON.stringify({          contents: [
             {
@@ -266,10 +269,13 @@ Place the single best match at position #1, followed by up to 3 close or plausib
 
     try {
       const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         signal: controller.signal,
         body: JSON.stringify({
           contents: [
@@ -343,10 +349,13 @@ Return ONLY valid JSON:
 
     try {
       const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         signal: controller.signal,
         body: JSON.stringify({
           contents: [

@@ -146,7 +146,7 @@ export class RealDebridAdapter implements DebridAdapter {
           const data = await this.request(path, apiKey);
           return { batch, data };
         } catch (err: any) {
-          if (err instanceof RealDebridError && err.statusCode === 401) {
+          if (err instanceof RealDebridError && (err.statusCode === 401 || err.statusCode === 429)) {
             throw err;
           }
           console.warn(`[RealDebrid] Batch instantAvailability check failed:`, err?.message ?? err);

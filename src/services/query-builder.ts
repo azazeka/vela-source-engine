@@ -135,6 +135,17 @@ export class QueryBuilder {
         queries.add(`${cleanTitle} ${cleanOrig}`);
         if (request.year) queries.add(`${cleanTitle} ${cleanOrig} ${request.year}`);
       }
+
+      // Ukrainian specific target queries for CIS trackers (RuTor, etc.)
+      if (request.preferredLanguages?.some(l => l.toLowerCase().startsWith('uk'))) {
+        if (cleanOrig) {
+          queries.add(`${cleanOrig} ukr`);
+          if (request.year) queries.add(`${cleanOrig} ${request.year} ukr`);
+        }
+        if (cleanTitle) {
+          queries.add(`${cleanTitle} ukr`);
+        }
+      }
     } else if (request.type === 'episode') {
       const { all, cyrillic, latin } = this.getTitles(request);
       const season = request.season ?? 1;

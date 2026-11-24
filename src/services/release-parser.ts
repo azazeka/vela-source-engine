@@ -36,6 +36,7 @@ export class ReleaseParser {
         audio: [],
         channels: null,
         languages: [],
+        audioStudios: [],
         year: null,
         season: null,
         episode: null,
@@ -67,8 +68,8 @@ export class ReleaseParser {
     const audio = this.parseAudio(lower);
     const channels = this.parseChannels(lower);
 
-    // 7. Languages
-    const languages = this.parseLanguages(lower);
+    // 7. Languages & Audio Studios
+    const { languages, audioStudios } = this.parseAudioMetadata(lower);
 
     // 8. Year
     const year = this.parseYear(clean);
@@ -86,6 +87,7 @@ export class ReleaseParser {
       audio,
       channels,
       languages,
+      audioStudios,
       year,
       season,
       episode,
@@ -200,13 +202,82 @@ export class ReleaseParser {
     return null;
   }
 
-  private static parseLanguages(lower: string): string[] {
+  private static readonly UKR_STUDIOS: { pattern: RegExp; name: string }[] = [
+    { pattern: /(?<![\p{L}\p{N}])(postmodern|постмодерн)(?![\p{L}\p{N}])/iu, name: 'Postmodern' },
+    { pattern: /(?<![\p{L}\p{N}])(le[- ]?doyen|ле[- ]?до[еє]н)(?![\p{L}\p{N}])/iu, name: 'Le Doyen' },
+    { pattern: /(?<![\p{L}\p{N}])(так треба|tak треба|tak treba)(?![\p{L}\p{N}])/iu, name: 'Так Треба' },
+    { pattern: /(?<![\p{L}\p{N}])(незупиняйсь\w*|незупиняйся)(?![\p{L}\p{N}])/iu, name: 'НеЗупиняйСя' },
+    { pattern: /(?<![\p{L}\p{N}])(цікава ідея|tsikava ideya)(?![\p{L}\p{N}])/iu, name: 'Цікава Ідея' },
+    { pattern: /(?<![\p{L}\p{N}])(dniprofilm|дніпрофільм)(?![\p{L}\p{N}])/iu, name: 'DniproFilm' },
+    { pattern: /(?<![\p{L}\p{N}])(baibako|байбако)(?![\p{L}\p{N}])/iu, name: 'BaibaKo' },
+    { pattern: /(?<![\p{L}\p{N}])(воднерило|в одне рило|vodnerylo)(?![\p{L}\p{N}])/iu, name: 'В одне рило' },
+    { pattern: /(?<![\p{L}\p{N}])(ufdub|uf dub)(?![\p{L}\p{N}])/iu, name: 'UFDub' },
+    { pattern: /(?<![\p{L}\p{N}])(hurtom|гуртом)(?![\p{L}\p{N}])/iu, name: 'Hurtom' },
+    { pattern: /(?<![\p{L}\p{N}])(starlight|старлайт)(?![\p{L}\p{N}])/iu, name: 'Starlight' },
+    { pattern: /(?<![\p{L}\p{N}])(1\+1|плюси)(?![\p{L}\p{N}])/iu, name: '1+1' },
+  ];
+
+  private static readonly RUS_STUDIOS: { pattern: RegExp; name: string }[] = [
+    { pattern: /(?<![\p{L}\p{N}])(red[- ]?head[- ]?sound|rhs)(?![\p{L}\p{N}])/iu, name: 'Red Head Sound' },
+    { pattern: /(?<![\p{L}\p{N}])(hdrezka|hd-rezka|резка)(?![\p{L}\p{N}])/iu, name: 'HDRezka' },
+    { pattern: /(?<![\p{L}\p{N}])(lostfilm|лостфильм)(?![\p{L}\p{N}])/iu, name: 'LostFilm' },
+    { pattern: /(?<![\p{L}\p{N}])(кубик в кубе|квк)(?![\p{L}\p{N}])/iu, name: 'Кубик в кубе' },
+    { pattern: /(?<![\p{L}\p{N}])(newstudio|ньюстудио)(?![\p{L}\p{N}])/iu, name: 'NewStudio' },
+    { pattern: /(?<![\p{L}\p{N}])(кураж[- ]?бамбей)(?![\p{L}\p{N}])/iu, name: 'Кураж-Бамбей' },
+    { pattern: /(?<![\p{L}\p{N}])(пифагор)(?![\p{L}\p{N}])/iu, name: 'Пифагор' },
+    { pattern: /(?<![\p{L}\p{N}])(невафильм)(?![\p{L}\p{N}])/iu, name: 'Невафильм' },
+    { pattern: /(?<![\p{L}\p{N}])(flarrow[- ]?films)(?![\p{L}\p{N}])/iu, name: 'Flarrow Films' },
+    { pattern: /(?<![\p{L}\p{N}])(jaskier|яскьер)(?![\p{L}\p{N}])/iu, name: 'Jaskier' },
+    { pattern: /(?<![\p{L}\p{N}])(alexfilm|алексфильм)(?![\p{L}\p{N}])/iu, name: 'AlexFilm' },
+  ];
+
+  public static parseAudioMetadata(lower: string): { languages: string[]; audioStudios: string[] } {
     const langs: string[] = [];
-    if (/\b(multi|multilingual|multi[- ]?audio)\b/i.test(lower)) langs.push('multi');
-    if (/\b(rus|russian|русский|дубляж|itunes ru|mvo|avo|dub|lostfilm|hdrezka|hd-rezka|red head sound|rhs|кубик в кубе)\b/i.test(lower)) langs.push('ru');
-    if (/\b(eng|english|en)\b/i.test(lower)) langs.push('en');
-    if (/\b(dual|dual[- ]?audio)\b/i.test(lower)) langs.push('dual');
-    return langs;
+    const studios: string[] = [];
+
+    // 1. Ukrainian detection (with negative lookahead for subtitle-only releases)
+    const isUkrSubOnly = /(?<![\p{L}\p{N}])(sub|subs|субтитр\w*)[:\s-]*.*(ukr|укр)(?![\p{L}\p{N}])/iu.test(lower)
+      && !/(?<![\p{L}\p{N}])(ukr|укр).*?(audio|sound|дво|мво|дубл|звук|itunes|лицензия)(?![\p{L}\p{N}])/iu.test(lower);
+
+    const matchedUkr = this.UKR_STUDIOS.filter(s => s.pattern.test(lower));
+    const hasUkrAudio = !isUkrSubOnly && (
+      /(?<![\p{L}\p{N}])(ukr|ukrainian|укр|українськ\w*)(?![\p{L}\p{N}])/iu.test(lower) ||
+      matchedUkr.length > 0
+    );
+
+    if (hasUkrAudio) {
+      langs.push('uk');
+      for (const m of matchedUkr) {
+        if (!studios.includes(m.name)) studios.push(m.name);
+      }
+    }
+
+    // 2. Russian detection
+    const matchedRus = this.RUS_STUDIOS.filter(s => s.pattern.test(lower));
+    const hasRusAudio = /(?<![\p{L}\p{N}])(rus|russian|рус|русск\w*|дубляж|лицензия|itunes ru|mvo|avo|dvo)(?![\p{L}\p{N}])/iu.test(lower) ||
+      matchedRus.length > 0;
+
+    if (hasRusAudio) {
+      langs.push('ru');
+      for (const m of matchedRus) {
+        if (!studios.includes(m.name)) studios.push(m.name);
+      }
+    }
+
+    // 3. English detection
+    if (/(?<![\p{L}\p{N}])(eng|english|en|original|orig)(?![\p{L}\p{N}])/iu.test(lower)) {
+      langs.push('en');
+    }
+
+    // 4. Multi / Dual detection
+    if (/(?<![\p{L}\p{N}])(multi|multilingual|multi[- ]?audio|мульти)(?![\p{L}\p{N}])/iu.test(lower)) langs.push('multi');
+    if (/(?<![\p{L}\p{N}])(dual|dual[- ]?audio|дуал)(?![\p{L}\p{N}])/iu.test(lower)) langs.push('dual');
+
+    return { languages: langs, audioStudios: studios };
+  }
+
+  private static parseLanguages(lower: string): string[] {
+    return this.parseAudioMetadata(lower).languages;
   }
 
   private static parseYear(clean: string): number | null {

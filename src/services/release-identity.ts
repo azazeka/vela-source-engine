@@ -55,7 +55,7 @@ export class ReleaseIdentity {
         if (value === title) return true;
         if (!value.startsWith(title + ' ')) return false;
         const suffix = value.slice(title.length + 1);
-        if (!/^(?:s\d{1,2}(?:e\d+)?|\d{1,2}x\d+|e\d+|ep\d+|seasons? \d+|сезоны? \d+|\d+(?: \d+)? сезоны?|complete(?: series)?|all seasons|collection|полный сериал|все сезоны|(?:19|20)\d{2}|2160p|1080[pi]|720p|480p|uhd|bluray|blu ray|web dl|webrip|hdtv)(?: |$)/iu.test(suffix)) return false;
+        if (!/^(?:s\d{1,2}(?:e\d+)?|\d{1,2}x\d+|e\d+|ep\d+|seasons? \d+|сезоны? \d+|\d+(?: \d+)? сезоны?|complete(?: series)?|all seasons|collection|полный сериал|все сезоны|(?:19|20)\d{2}|2160p|1080[pi]|720p|480p|uhd|bluray|blu ray|web dl|webrip|hdtv|directors?(?: cut)?|extended(?: cut)?|remastered|repack|proper|unrated|criterion(?: edition)?|imax(?: edition)?|theatrical(?: cut)?|ultimate(?: cut)?|special edition)(?: |$)/iu.test(suffix)) return false;
         const year = /^(19\d{2}|20\d{2})(?: |$)/.exec(suffix);
         return !request.year || !year || Number(year[1]) === request.year;
       });

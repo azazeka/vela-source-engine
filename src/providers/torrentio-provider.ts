@@ -99,7 +99,19 @@ export class TorrentioProvider implements TorrentProvider {
 
       const rawText = s.title ?? s.name ?? '';
       const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-      const name = lines[0] || s.behaviorHints?.filename || infoHash;
+      let name = lines[0] || s.behaviorHints?.filename || infoHash;
+
+      // Extract language indicators from Torrentio's multi-line details (flags & tags)
+      const langTags: string[] = [];
+      if (rawText.includes('🇺🇦') || /\bukrainian\b/i.test(rawText)) {
+        if (!/\b(ukr|укр|ukrainian)\b/i.test(name)) langTags.push('UKR');
+      }
+      if (rawText.includes('🇷🇺') || /\brussian\b/i.test(rawText)) {
+        if (!/\b(rus|рус|russian)\b/i.test(name)) langTags.push('RUS');
+      }
+      if (langTags.length > 0) {
+        name = `${name} [${langTags.join(' ')}]`;
+      }
 
       let seeders = 0;
       let sizeBytes = 0;

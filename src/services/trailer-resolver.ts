@@ -103,23 +103,17 @@ export class TrailerResolver {
       console.warn(`[TrailerResolver] VisionOS client failed for ${cleanId}: ${err?.message ?? err}`);
     }
 
-    // 2. Fallback to Android VR client for direct high-res MP4
+    // 2. Fallback to Android VR client for direct high-res MP4 (muxed only so audio is present)
     try {
-      const yt = await this.getAndroidClient();
+      const yt = await this.getAndroidVRClient();
       const info = await yt.getBasicInfo(cleanId);
-      const adaptive = info.streaming_data?.adaptive_formats || [];
       const formats = info.streaming_data?.formats || [];
 
-      // Find highest video mp4
-      const videoCandidates = adaptive
-        .filter((f) => f.has_video && f.mime_type.includes('mp4') && f.url)
-        .sort((a, b) => (b.height || 0) - (a.height || 0));
-
       const muxedCandidates = formats
-        .filter((f) => f.has_video && f.url)
+        .filter((f) => f.has_video && f.has_audio && f.url)
         .sort((a, b) => (b.height || 0) - (a.height || 0));
 
-      const bestStream = muxedCandidates[0] || videoCandidates[0];
+      const bestStream = muxedCandidates[0];
       if (bestStream && bestStream.url) {
         const result: TrailerStreamInfo = {
           streamUrl: bestStream.url,
@@ -145,15 +139,11 @@ export class TrailerResolver {
       const adaptive = info.streaming_data?.adaptive_formats || [];
       const formats = info.streaming_data?.formats || [];
 
-      const videoCandidates = adaptive
-        .filter((f) => f.has_video && f.mime_type.includes('mp4') && f.url)
-        .sort((a, b) => (b.height || 0) - (a.height || 0));
-
       const muxedCandidates = formats
-        .filter((f) => f.has_video && f.url)
+        .filter((f) => f.has_video && f.has_audio && f.url)
         .sort((a, b) => (b.height || 0) - (a.height || 0));
 
-      const bestStream = muxedCandidates[0] || videoCandidates[0];
+      const bestStream = muxedCandidates[0];
       if (bestStream && bestStream.url) {
         const result: TrailerStreamInfo = {
           streamUrl: bestStream.url,

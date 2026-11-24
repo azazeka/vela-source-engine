@@ -13,9 +13,18 @@ interface DebridHashEntry {
 }
 
 export class CacheManager {
+  private static readonly MAX_CANDIDATES = 2000;
+  private static readonly MAX_DEBRID_HASHES = 5000;
   private static candidatesCache = new Map<string, CachedEntry<PlayCandidate[]>>();
   private static failedCandidates = new Set<string>();
   private static debridHashCache = new Map<string, DebridHashEntry>();
+
+  private static enforceLimit<K, V>(map: Map<K, V>, max: number) {
+    if (map.size >= max) {
+      const first = map.keys().next().value;
+      if (first !== undefined) map.delete(first);
+    }
+  }
 
   public static getCandidates(mediaKey: string, scope = ''): PlayCandidate[] | null {
     const entry = this.candidatesCache.get(`${scope}:${mediaKey}`);
@@ -29,6 +38,7 @@ export class CacheManager {
   }
 
   public static setCandidates(mediaKey: string, candidates: PlayCandidate[], ttlMs: number = 30 * 60 * 1000, scope = ''): void {
+    this.enforceLimit(this.candidatesCache, this.MAX_CANDIDATES);
     this.candidatesCache.set(`${scope}:${mediaKey}`, {
       data: candidates,
       expiresAt: Date.now() + ttlMs,
@@ -53,6 +63,7 @@ export class CacheManager {
     ttlMs: number = 15 * 60 * 1000,
     scope = ''
   ): void {
+    this.enforceLimit(this.debridHashCache, this.MAX_DEBRID_HASHES);
     const key = `${debridId}:${scope}:${hash.toLowerCase()}`;
     this.debridHashCache.set(key, {
       torrent,

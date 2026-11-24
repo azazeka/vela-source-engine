@@ -15,27 +15,28 @@ export class RealDebridLibraryProvider implements TorrentProvider {
       const torrents = await this.adapter.listTorrents(apiKey);
       const matchedTorrents = torrents.filter(t => t.ready && ReleaseIdentity.matches(t.name, request));
 
-      const releases: RawRelease[] = [];
-      for (const torrent of matchedTorrents) {
-        let files = torrent.files;
-        if (!files || files.length === 0) {
-          const full = await this.adapter.getTorrentById(torrent.id, apiKey);
-          if (full?.files) files = full.files;
-        }
-        if (!files || files.length === 0) continue;
+      const releases = (await Promise.all(
+        matchedTorrents.map(async (torrent) => {
+          let files = torrent.files;
+          if (!files || files.length === 0) {
+            const full = await this.adapter.getTorrentById(torrent.id, apiKey);
+            if (full?.files) files = full.files;
+          }
+          if (!files || files.length === 0) return null;
 
-        const file = FileMatcher.matchFile(request, files, torrent.name);
-        if (!file) continue;
+          const file = FileMatcher.matchFile(request, files, torrent.name);
+          if (!file) return null;
 
-        releases.push({
-          provider: this.id,
-          name: torrent.name,
-          infoHash: torrent.hash,
-          sizeBytes: file.size,
-          seeders: 0,
-          libraryFiles: files,
-        });
-      }
+          return {
+            provider: this.id,
+            name: torrent.name,
+            infoHash: torrent.hash,
+            sizeBytes: file.size,
+            seeders: 0,
+            libraryFiles: files,
+          } as RawRelease;
+        })
+      )).filter((r): r is RawRelease => r !== null);
       return releases;
     } catch {
       return [];

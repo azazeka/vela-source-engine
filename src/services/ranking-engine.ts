@@ -1,10 +1,42 @@
 import { PlayCandidate, QualityPreset } from '../types';
 
 export class RankingEngine {
-  public static rank(candidates: PlayCandidate[], preset: string = 'best'): PlayCandidate[] {
+  private static normalizeLang(lang: string): string {
+    const l = lang.trim().toLowerCase();
+    if (l === 'uk' || l === 'ukr' || l === 'ukrainian' || l === 'укр') return 'uk';
+    if (l === 'ru' || l === 'rus' || l === 'russian' || l === 'рус') return 'ru';
+    if (l === 'en' || l === 'eng' || l === 'english') return 'en';
+    return l;
+  }
+
+  private static matchesLanguage(cand: PlayCandidate, preferredNormalized: string[]): boolean {
+    if (!cand.languages || cand.languages.length === 0) return false;
+    const candNormalized = cand.languages.map(l => this.normalizeLang(l));
+    return preferredNormalized.some(p => candNormalized.includes(p));
+  }
+
+  private static isMultiOrDual(cand: PlayCandidate): boolean {
+    if (!cand.languages) return false;
+    return cand.languages.includes('multi') || cand.languages.includes('dual');
+  }
+
+  public static rank(candidates: PlayCandidate[], preset: string = 'best', preferredLanguages?: string[]): PlayCandidate[] {
     const qualityPreset: QualityPreset = preset === 'balanced' ? 'balanced' : 'best';
+    const normPreferred = (preferredLanguages || [])
+      .map(l => this.normalizeLang(l))
+      .filter(l => Boolean(l) && l !== 'auto');
+
     const scored = candidates.map((cand) => {
-      const score = this.calculateScore(cand, qualityPreset);
+      let score = this.calculateScore(cand, qualityPreset);
+      if (normPreferred.length > 0) {
+        if (this.matchesLanguage(cand, normPreferred)) {
+          score += 2500;
+        } else if (this.isMultiOrDual(cand)) {
+          score += 800;
+        } else if (cand.languages && cand.languages.length > 0) {
+          score -= 1500;
+        }
+      }
       const badges = this.generateBadges(cand);
       return {
         ...cand,
@@ -19,6 +51,20 @@ export class RankingEngine {
       // 1. Cached status (playable now)
       if (Number(b.cached) !== Number(a.cached)) {
         return Number(b.cached) - Number(a.cached);
+      }
+
+      // 2. Language match priority (when user explicitly requests a language)
+      if (normPreferred.length > 0) {
+        const aMatch = this.matchesLanguage(a, normPreferred);
+        const bMatch = this.matchesLanguage(b, normPreferred);
+        if (Number(bMatch) !== Number(aMatch)) {
+          return Number(bMatch) - Number(aMatch);
+        }
+        const aMulti = this.isMultiOrDual(a);
+        const bMulti = this.isMultiOrDual(b);
+        if (Number(bMulti) !== Number(aMulti)) {
+          return Number(bMulti) - Number(aMulti);
+        }
       }
 
       // Native video and audio compatibility outrank bitrate in both profiles.
@@ -229,7 +275,25 @@ export class RankingEngine {
 
     // Readiness
     if (cand.cached) {
-      badges.push('⚡ Ready on TorBox');
+      const isRD = cand.provider.toLowerCase().includes('realdebrid') || cand.provider.toLowerCase().includes('real-debrid');
+      badges.push(isRD ? '⚡ Ready on Real-Debrid' : '⚡ Ready on TorBox');
+    }
+
+    // Languages & Studios
+    if (cand.languages && cand.languages.length > 0) {
+      if (cand.languages.includes('uk') || cand.languages.includes('ukr')) {
+        const studio = cand.audioStudios?.find(s => ['Postmodern', 'Le Doyen', 'Так Треба', 'НеЗупиняйСя', 'Цікава Ідея', 'DniproFilm', 'Hurtom'].includes(s));
+        badges.push(studio ? `🇺🇦 ${studio}` : '🇺🇦 UKR');
+      }
+      if (cand.languages.includes('ru') || cand.languages.includes('rus')) {
+        const studio = cand.audioStudios?.find(s => ['Red Head Sound', 'HDRezka', 'LostFilm', 'Кубик в кубе', 'Пифагор'].includes(s));
+        badges.push(studio ? `🇷🇺 ${studio}` : '🇷🇺 RUS');
+      }
+      if (cand.languages.includes('en') || cand.languages.includes('eng')) {
+        badges.push('🇬🇧 ENG');
+      } else if (cand.languages.includes('multi')) {
+        badges.push('🌐 MULTI');
+      }
     }
 
     return badges;

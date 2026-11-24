@@ -138,7 +138,8 @@ export function createRouter(
   // 3. GET /trailer/stream/:key (Public trailer stream resolver for Apple TV)
   router.get('/trailer/stream/:key?', async (req: Request, res: Response) => {
     try {
-      const key = (req.params.key || req.query.key) as string;
+      const rawKey = req.params.key || req.query.key;
+      const key = typeof rawKey === 'string' ? rawKey.trim() : Array.isArray(rawKey) && typeof rawKey[0] === 'string' ? rawKey[0].trim() : '';
       if (!key) {
         res.status(400).json({ error: 'Missing trailer key' });
         return;
@@ -147,6 +148,17 @@ export function createRouter(
       const result = await trailerResolver.resolve(key);
 
       if (redirect) {
+        try {
+          const parsed = new URL(result.streamUrl);
+          const isAllowedHost = parsed.hostname.endsWith('.googlevideo.com') || parsed.hostname.endsWith('.youtube.com');
+          if (parsed.protocol !== 'https:' || !isAllowedHost) {
+            res.status(502).json({ error: 'Invalid trailer stream destination' });
+            return;
+          }
+        } catch {
+          res.status(502).json({ error: 'Malformed trailer stream URL' });
+          return;
+        }
         res.redirect(302, result.streamUrl);
         return;
       }
@@ -241,6 +253,7 @@ export function createRouter(
   router.post('/sources/rank', (req: Request, res: Response) => {
     const mediaKey = req.body.mediaKey as string;
     const preset = (req.body.preset as QualityPreset) || 'best';
+    const preferredLanguages = req.body.preferredLanguages as string[] | undefined;
 
     if (!mediaKey) {
       res.status(400).json({ error: 'Missing mediaKey' });
@@ -254,7 +267,7 @@ export function createRouter(
       return;
     }
 
-    const reranked = RankingEngine.rank(cached, preset);
+    const reranked = RankingEngine.rank(cached, preset, preferredLanguages);
     res.json({ mediaKey, candidates: reranked });
   });
 
@@ -306,7 +319,7 @@ export function createRouter(
   // 8. POST /playback/failure (Section 15 & 17: Mark bad candidate and return fallback)
   router.post('/playback/failure', async (req: Request, res: Response) => {
     try {
-      const { candidateId, mediaKey, request } = req.body;
+      const { candidateId, mediaKey, request, reason } = req.body;
       if (!candidateId || !mediaKey) {
         res.status(400).json({ error: 'Missing candidateId or mediaKey' });
         return;
@@ -319,32 +332,42 @@ export function createRouter(
       }
 
       const adapter = getDebridAdapter(req);
-      // Mark candidate as bad
-      CacheManager.markCandidateFailure(candidateId, undefined, adapter.cacheScope(getApiKey(req)));
+      const isExpired = reason === 'expired';
 
-      // Check if we can fallback to the next candidate
+      // Mark candidate as bad only if failure was not due to an expired token
+      if (!isExpired) {
+        CacheManager.markCandidateFailure(candidateId, undefined, adapter.cacheScope(getApiKey(req)));
+      }
+
+      // Check if we can fallback to the next cached candidate (or re-resolve current if expired)
       const cached = CacheManager.getCandidates(mediaKey, adapter.cacheScope(getApiKey(req)));
-      if (cached && cached.length > 0) {
-        const nextCandidate = cached[0];
+      if (cached && cached.length > 0 && request) {
+        const nextCandidate = isExpired
+          ? (cached.find((c) => c.candidateId === candidateId && c.cached) ?? cached.find((c) => c.cached))
+          : cached.find((c) => c.cached);
         const apiKey = getApiKey(req);
-        if (request) {
-          const fallbackResult = await sourceEngine.resolvePlay(
-            request,
-            nextCandidate.candidateId,
-            'best',
-            apiKey,
-            provider
-          );
-          res.json({
-            status: 'fallback_ready',
-            fallback: fallbackResult,
-          });
-          return;
+        if (nextCandidate) {
+          try {
+            const fallbackResult = await sourceEngine.resolvePlay(
+              request,
+              nextCandidate.candidateId,
+              'best',
+              apiKey,
+              provider
+            );
+            res.json({
+              status: isExpired ? 'refreshed' : 'fallback_ready',
+              fallback: fallbackResult,
+            });
+            return;
+          } catch {
+            // Gracefully fall through to marked_failed if fallback resolution encounters an issue
+          }
         }
       }
 
       res.json({
-        status: 'marked_failed',
+        status: isExpired ? 'refresh_failed' : 'marked_failed',
         candidateId,
       });
     } catch (err: any) {

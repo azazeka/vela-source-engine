@@ -58,13 +58,13 @@ export class Normalizer {
     return Number(p.resolution !== 'unknown') + Number(p.source !== 'unknown')
       + Number(p.releaseType !== 'unknown') + Number(p.videoCodec !== 'unknown')
       + Number(p.hdr.some(h => h !== 'sdr')) + Number(p.audio.some(a => a !== 'unknown'))
-      + Number(p.channels !== null);
+      + Number(p.channels !== null) + Number(p.languages.length > 0);
   }
 
   public static normalizeHash(hash: string | undefined): string | null {
     if (!hash) return null;
     const clean = hash.trim().toLowerCase();
-    // 40 hex chars (SHA-1) or 32 base32 chars
+    // 40 hex chars (SHA-1)
     if (/^[a-f0-9]{40}$/i.test(clean)) {
       return clean;
     }
@@ -72,6 +72,22 @@ export class Normalizer {
     const match = clean.match(/xt=urn:btih:([a-f0-9]{40})/i);
     if (match) {
       return match[1].toLowerCase();
+    }
+    // 32 base32 chars (RFC 4648)
+    const b32Match = clean.match(/xt=urn:btih:([a-z2-7]{32})/i) || (/^[a-z2-7]{32}$/i.test(clean) ? [null, clean] : null);
+    if (b32Match && b32Match[1]) {
+      const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+      let bits = '';
+      for (const char of b32Match[1].toLowerCase()) {
+        const idx = alphabet.indexOf(char);
+        if (idx < 0) return null;
+        bits += idx.toString(2).padStart(5, '0');
+      }
+      let hex = '';
+      for (let i = 0; i + 8 <= bits.length; i += 8) {
+        hex += parseInt(bits.slice(i, i + 8), 2).toString(16).padStart(2, '0');
+      }
+      return hex.length === 40 ? hex : null;
     }
     return null;
   }

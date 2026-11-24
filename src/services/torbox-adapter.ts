@@ -142,8 +142,8 @@ export class TorBoxAdapter implements DebridAdapter {
     if (!hashes.length) return result;
 
     const batches: string[][] = [];
-    for (let offset = 0; offset < hashes.length; offset += 100) {
-      batches.push(hashes.slice(offset, offset + 100).map(hash => hash.toLowerCase()));
+    for (let offset = 0; offset < hashes.length; offset += 40) {
+      batches.push(hashes.slice(offset, offset + 40).map(hash => hash.toLowerCase()));
     }
 
     const responses = await Promise.all(
@@ -242,10 +242,11 @@ export class TorBoxAdapter implements DebridAdapter {
             torrent = direct;
             console.log(`[TorBox] Poll #${attempt + 1}: Found by ID=${createdId}, ready=${torrent.ready}, filesCount=${torrent.files.length}`);
             if (torrent.ready) break;
+            continue;
           }
         }
 
-        // 2. Fallback: Query list
+        // 2. Fallback: Query list only when direct lookup is unavailable or returns null
         const list = await this.listTorrents(apiKey);
         torrent = (createdId != null ? list.find(t => t.id === createdId) : undefined)
           ?? list.find(t => t.hash === normHash);
